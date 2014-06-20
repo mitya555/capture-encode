@@ -1,0 +1,5 @@
+echo "  CC    " capture-example.o;depbase=`echo capture-example.o | sed 's|[^/]*$|.deps/&|;s|\.o$||'`;\
+	gcc -std=gnu99 -DHAVE_CONFIG_H -I. -I../..   -I../../lib/include -Wall -Wpointer-arith -D_GNU_SOURCE -I../../include   -g -O2 -MT capture-example.o -MD -MP -MF $depbase.Tpo -c -o capture-example.o capture-example.c &&\
+	mv -f $depbase.Tpo $depbase.Po
+rm -f capture-example
+echo "  CCLD  " capture-example;/bin/bash ../../libtool --silent --tag=CC   --mode=link gcc -std=gnu99  -g -O2 -lrt  -o capture-example capture-example.o  
