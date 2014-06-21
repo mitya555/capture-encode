@@ -57,6 +57,7 @@ static double           fps_total;
 static int              fps_count;
 static int              encode, tst_enc;
 static OMX_COLOR_FORMATTYPE img_fmt = OMX_COLOR_FormatYUV420PackedPlanar;
+static int              img_width = 640, img_height = 480;
 static int              frame_count = 100;
 
 static void time_diff(struct timespec *start, struct timespec *end, struct timespec *result)
@@ -210,6 +211,12 @@ void capture_frame(void *out_buf, OMX_U32 *out_size)
 	}
 }
 
+static inline void report_fps_avg()
+{
+	fprintf(stderr, "%sAverage frame rate: %.2f fps\n", fps_cur ? "\n" : "", fps_total / fps_count);
+	fflush(stderr);
+}
+
 static void mainloop(void)
 {
 	unsigned int count = frame_count;
@@ -217,10 +224,8 @@ static void mainloop(void)
 	while (count-- > 0)
 		capture_frame(NULL, NULL);
 
-	if (fps_avg) {
-		fprintf(stderr, "%sAverage frame rate: %.2f fps\n", fps_cur ? "\n" : "", fps_total / fps_count);
-		fflush(stderr);
-	}
+	if (fps_avg)
+		report_fps_avg();
 }
 
 static void stop_capturing(void)
@@ -560,27 +565,31 @@ static void usage(FILE *fp, int argc, char **argv)
 		 "-t | --tst_enc filename   Tests encoding to H.264 to filename [%s]\n"
 		 "-n | --encode             Encodes to H.264 to stdout (enforces --read and disables --output)\n"
 		 "-i | --img_fmt            Input image format for encoding [%i]\n"
+		 "-x | --img_width          Input image width for encoding [%i]\n"
+		 "-y | --img_height         Input image height for encoding [%i]\n"
 		 "",
-		 argv[0], dev_name, frame_count, test_encode_filename, img_fmt);
+		 argv[0], dev_name, frame_count, test_encode_filename, img_fmt, img_width, img_height);
 }
 
-static const char short_options[] = "d:hmruofc:pat:ni:";
+static const char short_options[] = "d:hmruofc:pat:ni:x:y:";
 
 static const struct option
 long_options[] = {
-	{ "device",  required_argument, NULL, 'd' },
-	{ "help",    no_argument,       NULL, 'h' },
-	{ "mmap",    no_argument,       NULL, 'm' },
-	{ "read",    no_argument,       NULL, 'r' },
-	{ "userp",   no_argument,       NULL, 'u' },
-	{ "output",  no_argument,       NULL, 'o' },
-	{ "format",  no_argument,       NULL, 'f' },
-	{ "count",   required_argument, NULL, 'c' },
-	{ "fps_cur", no_argument,       NULL, 'p' },
-	{ "fps_avg", no_argument,       NULL, 'a' },
-	{ "tst_enc", optional_argument, NULL, 't' },
-	{ "encode",  no_argument,       NULL, 'n' },
-	{ "img_fmt", required_argument, NULL, 'i' },
+	{ "device",    required_argument, NULL, 'd' },
+	{ "help",      no_argument,       NULL, 'h' },
+	{ "mmap",      no_argument,       NULL, 'm' },
+	{ "read",      no_argument,       NULL, 'r' },
+	{ "userp",     no_argument,       NULL, 'u' },
+	{ "output",    no_argument,       NULL, 'o' },
+	{ "format",    no_argument,       NULL, 'f' },
+	{ "count",     required_argument, NULL, 'c' },
+	{ "fps_cur",   no_argument,       NULL, 'p' },
+	{ "fps_avg",   no_argument,       NULL, 'a' },
+	{ "tst_enc",   optional_argument, NULL, 't' },
+	{ "encode",    no_argument,       NULL, 'n' },
+	{ "img_fmt",   required_argument, NULL, 'i' },
+	{ "img_width", required_argument, NULL, 'x' },
+	{ "img_height",required_argument, NULL, 'y' },
 	{ 0, 0, 0, 0 }
 };
 
@@ -665,6 +674,20 @@ int main(int argc, char **argv)
 				errno_exit(optarg);
 			break;
 
+		case 'x':
+			errno = 0;
+			img_width = strtol(optarg, NULL, 0);
+			if (errno)
+				errno_exit(optarg);
+			break;
+
+		case 'y':
+			errno = 0;
+			img_height = strtol(optarg, NULL, 0);
+			if (errno)
+				errno_exit(optarg);
+			break;
+
 		default:
 			usage(stderr, argc, argv);
 			exit(EXIT_FAILURE);
@@ -688,8 +711,10 @@ int main(int argc, char **argv)
 	start_capturing();
 	if (encode) {
 		bcm_host_init();
-		capture_encode_loop(frame_count, 320, 240, 30, img_fmt); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
+		capture_encode_loop(frame_count, img_width, img_height, 30, img_fmt); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
 		bcm_host_deinit();
+		if (fps_avg)
+			report_fps_avg();
 	}
 	else
 		mainloop();
