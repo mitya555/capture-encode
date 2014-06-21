@@ -27,6 +27,9 @@
 
 #include <time.h>
 
+#include "bcm_host.h"
+#include "ilclient.h"
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
 enum io_method {
@@ -40,19 +43,21 @@ struct buffer {
 	size_t  length;
 };
 
-static char            *dev_name, *test_encode_filename;
+static char            *dev_name = "/dev/video0", 
+                       *test_encode_filename = "test.h264";
 static enum io_method   io = IO_METHOD_MMAP;
 static int              fd = -1;
-struct buffer          *buffers;
+static struct buffer   *buffers;
 static unsigned int     n_buffers;
 static int              output;
 static int              force_format;
 static int              fps, fps_cur, fps_avg;
-struct timespec         start, end;
+static struct timespec  start, end;
 static double           fps_total;
 static int              fps_count;
-static int              encode, enc_tst;
-static int              frame_count = 70;
+static int              encode, tst_enc;
+static OMX_COLOR_FORMATTYPE img_fmt = OMX_COLOR_FormatYUV420PackedPlanar;
+static int              frame_count = 100;
 
 static void time_diff(struct timespec *start, struct timespec *end, struct timespec *result)
 {
@@ -119,7 +124,7 @@ static void process_image(const void *p, int size)
 				errno_exit(str); \
 			}
 
-static int read_frame(void *out_buf, unsigned long *out_size)
+static int read_frame(void *out_buf, OMX_U32 *out_size)
 {
 	struct v4l2_buffer buf;
 	unsigned int i;
@@ -177,7 +182,7 @@ static int read_frame(void *out_buf, unsigned long *out_size)
 	return 1;
 }
 
-void capture_frame(void *out_buf, unsigned long *out_size)
+void capture_frame(void *out_buf, OMX_U32 *out_size)
 {
 	for (;;) {
 		fd_set fds;
@@ -548,17 +553,18 @@ static void usage(FILE *fp, int argc, char **argv)
 		 "-r | --read               Use read() calls\n"
 		 "-u | --userp              Use application allocated buffers\n"
 		 "-o | --output             Outputs stream to stdout\n"
-		 "-f | --format             Force format to 640x480 YUYV\n"
+		 "-f | --format             Force camera format to 640x480 YUYV\n"
 		 "-c | --count              Number of frames to grab [%i]\n"
 		 "-p | --fps_cur            Print current FPS (Frames Per Second)\n"
 		 "-a | --fps_avg            Print average FPS (Frames Per Second)\n"
+		 "-t | --tst_enc filename   Tests encoding to H.264 to filename [%s]\n"
 		 "-n | --encode             Encodes to H.264 to stdout (enforces --read and disables --output)\n"
-		 "-t | --enc_tst filename   Tests encode to H.264 to filename [%s]\n"
+		 "-i | --img_fmt            Input image format for encoding [%i]\n"
 		 "",
-		 argv[0], dev_name, frame_count, test_encode_filename);
+		 argv[0], dev_name, frame_count, test_encode_filename, img_fmt);
 }
 
-static const char short_options[] = "d:hmruofc:pant?";
+static const char short_options[] = "d:hmruofc:pat:ni:";
 
 static const struct option
 long_options[] = {
@@ -572,23 +578,20 @@ long_options[] = {
 	{ "count",   required_argument, NULL, 'c' },
 	{ "fps_cur", no_argument,       NULL, 'p' },
 	{ "fps_avg", no_argument,       NULL, 'a' },
+	{ "tst_enc", optional_argument, NULL, 't' },
 	{ "encode",  no_argument,       NULL, 'n' },
-	{ "enc_tst", optional_argument, NULL, 't' },
+	{ "img_fmt", required_argument, NULL, 'i' },
 	{ 0, 0, 0, 0 }
 };
 
 extern int
-capture_encode_loop(int frames);
+video_encode_test(char *outputfilename);
 
 extern int
-video_encode_test(char *outputfilename);
+capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat);
 
 int main(int argc, char **argv)
 {
-	dev_name = "/dev/video0";
-	
-	test_encode_filename = "~/test.h264";
-
 	for (;;) {
 		int idx;
 		int c;
@@ -645,14 +648,21 @@ int main(int argc, char **argv)
 			fps++;
 			break;
 
+		case 't':
+			tst_enc++;
+			if (optarg)
+				test_encode_filename = optarg;
+			break;
+
 		case 'n':
 			encode++;
 			break;
 
-		case 't':
-			enc_tst++;
-			if (optarg)
-				test_encode_filename = optarg;
+		case 'i':
+			errno = 0;
+			img_fmt = strtol(optarg, NULL, 0);
+			if (errno)
+				errno_exit(optarg);
 			break;
 
 		default:
@@ -666,15 +676,21 @@ int main(int argc, char **argv)
 		output = 0;
 	}
 
-	if (enc_tst) {
-		return video_encode_test(test_encode_filename);
+	if (tst_enc) {
+		bcm_host_init();
+		int res = video_encode_test(test_encode_filename);
+		bcm_host_deinit();
+		return res;
 	}
 
 	open_device();
 	init_device();
 	start_capturing();
-	if (encode)
-		capture_encode_loop(frame_count);
+	if (encode) {
+		bcm_host_init();
+		capture_encode_loop(frame_count, 320, 240, 30, img_fmt); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
+		bcm_host_deinit();
+	}
 	else
 		mainloop();
 	stop_capturing();

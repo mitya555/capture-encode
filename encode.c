@@ -309,10 +309,20 @@ video_encode_test(char *outputfilename)
 }
 
 extern void
-capture_frame(void *out_buf, unsigned long *out_size);
+capture_frame(void *out_buf, OMX_U32 *out_size);
+
+#define OMX_ERR_EXIT(fmt_str) {\
+      fprintf(stderr, fmt_str, __FUNCTION__, __LINE__, r);\
+      exit(1);\
+   }
+
+#define INIT_OMX_TYPE(var, type, port) memset(&(var), 0, sizeof(type));\
+   (var).nSize = sizeof(type);\
+   (var).nVersion.nVersion = OMX_VERSION;\
+   (var).nPortIndex = (port);
 
 int
-capture_encode_loop(int frames)
+capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat)
 {
    OMX_VIDEO_PARAM_PORTFORMATTYPE format;
    OMX_PARAM_PORTDEFINITIONTYPE def;
@@ -327,96 +337,66 @@ capture_encode_loop(int frames)
 
    memset(list, 0, sizeof(list));
 
-   bcm_host_init();
-
    if ((client = ilclient_init()) == NULL) {
       fprintf(stderr, "ilclient_init() for video_encode failed!\n");
       return -3;
    }
 
    if ((r = OMX_Init()) != OMX_ErrorNone) {
-      fprintf(stderr, "OMX_Init() for video_encode failed with %x!\n", r);
       ilclient_destroy(client);
+      fprintf(stderr, "OMX_Init() for video_encode failed with %x!\n", r);
       return -4;
    }
 
    // create video_encode
-   r = ilclient_create_component(client, &video_encode, "video_encode",
-                                 ILCLIENT_DISABLE_ALL_PORTS |
-                                 ILCLIENT_ENABLE_INPUT_BUFFERS |
-                                 ILCLIENT_ENABLE_OUTPUT_BUFFERS);
-   if (r != 0) {
-      fprintf(stderr, "ilclient_create_component() for video_encode failed with %x!\n", r);
-      exit(1);
-   }
+   if ((r = (OMX_ERRORTYPE)ilclient_create_component(client, &video_encode, "video_encode", 
+      ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_INPUT_BUFFERS | ILCLIENT_ENABLE_OUTPUT_BUFFERS)) != OMX_ErrorNone)
+      OMX_ERR_EXIT("%s:%d: ilclient_create_component() for video_encode failed with %x!\n")
+
    list[0] = video_encode;
 
    // get current settings of video_encode component from port 200
-   memset(&def, 0, sizeof(OMX_PARAM_PORTDEFINITIONTYPE));
-   def.nSize = sizeof(OMX_PARAM_PORTDEFINITIONTYPE);
-   def.nVersion.nVersion = OMX_VERSION;
-   def.nPortIndex = 200;
+   INIT_OMX_TYPE(def, OMX_PARAM_PORTDEFINITIONTYPE, 200)
 
-   if (OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def) != OMX_ErrorNone) {
-      fprintf(stderr, "%s:%d: OMX_GetParameter() for video_encode port 200 failed!\n", __FUNCTION__, __LINE__);
-      exit(1);
-   }
+   if ((r = OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
+	   OMX_ERR_EXIT("%s:%d: OMX_GetParameter() for video_encode port 200 failed with %x!\n")
 
    print_def(def, stderr);
+
    // Port 200: in 1/1 115200 16 enabled,not pop.,not cont. 320x240 320x240 @1966080 20
-   def.format.video.nFrameWidth = WIDTH;
-   def.format.video.nFrameHeight = HEIGHT;
-   def.format.video.xFramerate = 30 << 16;
+   def.format.video.nFrameWidth = frameWidth;
+   def.format.video.nFrameHeight = frameHeight;
+   def.format.video.xFramerate = frameRate << 16; // 30 << 16;
    def.format.video.nSliceHeight = def.format.video.nFrameHeight;
    def.format.video.nStride = def.format.video.nFrameWidth;
-   def.format.video.eColorFormat = OMX_COLOR_FormatYUV420PackedPlanar;
+   def.format.video.eColorFormat = colorFormat; // OMX_COLOR_FormatYUV420PackedPlanar;
 
    print_def(def, stderr);
 
-   r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def);
-   if (r != OMX_ErrorNone) {
-      fprintf(stderr, "%s:%d: OMX_SetParameter() for video_encode port 200 failed with %x!\n", __FUNCTION__, __LINE__, r);
-      exit(1);
-   }
+   if ((r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
+      OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for video_encode port 200 failed with %x!\n")
 
-   memset(&format, 0, sizeof(OMX_VIDEO_PARAM_PORTFORMATTYPE));
-   format.nSize = sizeof(OMX_VIDEO_PARAM_PORTFORMATTYPE);
-   format.nVersion.nVersion = OMX_VERSION;
-   format.nPortIndex = 201;
+   INIT_OMX_TYPE(format, OMX_VIDEO_PARAM_PORTFORMATTYPE, 201)
    format.eCompressionFormat = OMX_VIDEO_CodingAVC; // OMX_VIDEO_CodingMPEG4 fails, see https://github.com/raspberrypi/firmware/issues/162
 
    fprintf(stderr, "OMX_SetParameter for video_encode:201...\n");
-   r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoPortFormat, &format);
-   if (r != OMX_ErrorNone) {
-      fprintf(stderr, "%s:%d: OMX_SetParameter() for video_encode port 201 failed with %x!\n", __FUNCTION__, __LINE__, r);
-      exit(1);
-   }
+   if ((r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoPortFormat, &format)) != OMX_ErrorNone)
+      OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for video_encode port 201 failed with %x!\n")
 
    OMX_VIDEO_PARAM_BITRATETYPE bitrateType;
    // set current bitrate to 1Mbit
-   memset(&bitrateType, 0, sizeof(OMX_VIDEO_PARAM_BITRATETYPE));
-   bitrateType.nSize = sizeof(OMX_VIDEO_PARAM_BITRATETYPE);
-   bitrateType.nVersion.nVersion = OMX_VERSION;
+   INIT_OMX_TYPE(bitrateType, OMX_VIDEO_PARAM_BITRATETYPE, 201)
    bitrateType.eControlRate = OMX_Video_ControlRateVariable;
    bitrateType.nTargetBitrate = 1000000;
-   bitrateType.nPortIndex = 201;
 
-   r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType);
-   if (r != OMX_ErrorNone) {
-      fprintf(stderr, "%s:%d: OMX_SetParameter() for bitrate for video_encode port 201 failed with %x!\n", __FUNCTION__, __LINE__, r);
-      exit(1);
-   }
+   if ((r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType)) != OMX_ErrorNone)
+      OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for bitrate for video_encode port 201 failed with %x!\n")
 
    // get current bitrate
-   memset(&bitrateType, 0, sizeof(OMX_VIDEO_PARAM_BITRATETYPE));
-   bitrateType.nSize = sizeof(OMX_VIDEO_PARAM_BITRATETYPE);
-   bitrateType.nVersion.nVersion = OMX_VERSION;
-   bitrateType.nPortIndex = 201;
+   INIT_OMX_TYPE(bitrateType, OMX_VIDEO_PARAM_BITRATETYPE, 201)
 
-   if (OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType) != OMX_ErrorNone) {
-      fprintf(stderr, "%s:%d: OMX_GetParameter() for video_encode for bitrate port 201 failed!\n", __FUNCTION__, __LINE__);
-      exit(1);
-   }
+   if ((r = OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType)) != OMX_ErrorNone)
+      OMX_ERR_EXIT("%s:%d: OMX_GetParameter() for video_encode for bitrate port 201 failed!\n")
    fprintf(stderr, "Current Bitrate=%u\n",bitrateType.nTargetBitrate);
 
    fprintf(stderr, "encode to idle...\n");
@@ -474,9 +454,9 @@ capture_encode_loop(int frames)
             if (r != out->nFilledLen) {
                fprintf(stderr, "fwrite: Error emptying buffer: %d!\n", r);
             }
-            else {
-               fprintf(stderr, "Writing frame %d/%d\n", framenumber, NUMFRAMES);
-            }
+            //else {
+            //   fprintf(stderr, "Writing frame %d/%d\n", framenumber, frames);
+            //}
             out->nFilledLen = 0;
          }
          else {
@@ -513,4 +493,5 @@ capture_encode_loop(int frames)
 //   }
 //   bcm_host_init();
 //   return video_encode_test(argv[1]);
+//   bcm_host_deinit();
 //}

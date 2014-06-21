@@ -15,6 +15,8 @@ INCLUDES+=-I$(SDKSTAGE)/opt/vc/include/ -I$(SDKSTAGE)/opt/vc/include/interface/v
 
 V4L_TEST_DIR+=/home/pi/v4l-utils-temp/v4l-utils/contrib/test/
 
+V4L_INCLUDES+=-I$(V4L_TEST_DIR). -I$(V4L_TEST_DIR)../.. -I$(V4L_TEST_DIR)../../include -I$(V4L_TEST_DIR)../../lib/include
+
 OBJS+=capture-encode.o encode.o
 
 all: capture-encode
@@ -25,9 +27,9 @@ encode.o: encode.c
 
 capture-encode.o: capture-encode.c
 	@rm -f $@ 
-	#$(CC) $(CFLAGS) -I$(V4L_TEST_DIR). -I$(V4L_TEST_DIR)../.. -I$(V4L_TEST_DIR)../../include -I$(V4L_TEST_DIR)../../lib/include -g -c $< -o $@ -Wno-deprecated-declarations
-	$(CC) -std=gnu99 -DHAVE_CONFIG_H -I$(V4L_TEST_DIR). -I$(V4L_TEST_DIR)../..   -I$(V4L_TEST_DIR)../../lib/include -Wall -Wpointer-arith -D_GNU_SOURCE -I$(V4L_TEST_DIR)../../include -g -O2 -MT capture-encode.o -MD -MP -MF ./.deps/capture-encode.Tpo -c -o capture-encode.o capture-encode.c &&\
-	mv -f ./.deps/capture-encode.Tpo ./.deps/capture-encode.Po
+	#$(CC) -std=gnu99 -DHAVE_CONFIG_H $(V4L_INCLUDES) -Wall -Wpointer-arith -D_GNU_SOURCE -g -O2 -MT capture-encode.o -MD -MP -MF ./.deps/capture-encode.Tpo -c -o capture-encode.o capture-encode.c &&\
+	#mv -f ./.deps/capture-encode.Tpo ./.deps/capture-encode.Po
+	$(CC) $(CFLAGS) $(V4L_INCLUDES) $(INCLUDES) -g -c $< -o $@ -Wno-deprecated-declarations
 
 capture-encode: $(OBJS)
 	$(CC) -std=gnu99 -g -O2 -o $@ -Wl,--whole-archive $(OBJS) $(LDFLAGS) -Wl,--no-whole-archive -rdynamic
