@@ -300,7 +300,8 @@ static void uninit_device(void)
 
 	switch (io) {
 	case IO_METHOD_READ:
-		free(buffers[0].start);
+		if (buffers[0].start)
+			free(buffers[0].start);
 		break;
 
 	case IO_METHOD_MMAP:
@@ -318,7 +319,7 @@ static void uninit_device(void)
 	free(buffers);
 }
 
-static void init_read(unsigned int buffer_size)
+static void init_read(unsigned int buffer_size, int external_read_buffer)
 {
 	buffers = calloc(1, sizeof(*buffers));
 
@@ -328,11 +329,13 @@ static void init_read(unsigned int buffer_size)
 	}
 
 	buffers[0].length = buffer_size;
-	buffers[0].start = malloc(buffer_size);
+	if (!external_read_buffer) {
+		buffers[0].start = malloc(buffer_size);
 
-	if (!buffers[0].start) {
-		fprintf(stderr, "Out of memory\n");
-		exit(EXIT_FAILURE);
+		if (!buffers[0].start) {
+			fprintf(stderr, "Out of memory\n");
+			exit(EXIT_FAILURE);
+		}
 	}
 }
 
@@ -424,7 +427,7 @@ static void init_userp(unsigned int buffer_size)
 	}
 }
 
-static void init_device(void)
+static unsigned int init_device(int external_read_buffer)
 {
 	struct v4l2_capability cap;
 	struct v4l2_cropcap cropcap;
@@ -503,7 +506,7 @@ static void init_device(void)
 
 	switch (io) {
 	case IO_METHOD_READ:
-		init_read(fmt.fmt.pix.sizeimage);
+		init_read(fmt.fmt.pix.sizeimage, external_read_buffer);
 		break;
 
 	case IO_METHOD_MMAP:
@@ -514,6 +517,8 @@ static void init_device(void)
 		init_userp(fmt.fmt.pix.sizeimage);
 		break;
 	}
+
+	return fmt.fmt.pix.sizeimage;
 }
 
 static void close_device(void)
@@ -597,7 +602,10 @@ extern int
 video_encode_test(char *outputfilename);
 
 extern int
-capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat);
+capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, unsigned int bufsize);
+
+extern int
+capture_encode_jpeg_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, unsigned int bufsize);
 
 int main(int argc, char **argv)
 {
@@ -707,11 +715,12 @@ int main(int argc, char **argv)
 	}
 
 	open_device();
-	init_device();
+	unsigned int bufsize = init_device(encode);
+	fprintf(stderr, "capture buffer size: %d\n", bufsize);
 	start_capturing();
 	if (encode) {
 		bcm_host_init();
-		capture_encode_loop(frame_count, img_width, img_height, 30, img_fmt); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
+		capture_encode_jpeg_loop(frame_count, img_width, img_height, 30, img_fmt, bufsize); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
 		bcm_host_deinit();
 		if (fps_avg)
 			report_fps_avg();
