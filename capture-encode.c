@@ -720,7 +720,7 @@ int main(int argc, char **argv)
 	start_capturing();
 	if (encode) {
 		bcm_host_init();
-		capture_encode_jpeg_loop(frame_count, img_width, img_height, 30, img_fmt, bufsize); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
+		capture_encode_jpeg_loop(frame_count, img_width, img_height, 14, img_fmt, bufsize); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
 		bcm_host_deinit();
 		if (fps_avg)
 			report_fps_avg();

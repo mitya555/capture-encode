@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "interface/vcos/vcos_assert.h"
 
 #include "bcm_host.h"
 #include "ilclient.h"
@@ -70,40 +71,40 @@ generate_test_card(void *buf, OMX_U32 * filledLen, int frame)
 }
 
 static void
-print_def_(OMX_PARAM_PORTDEFINITIONTYPE def, FILE *out, int image)
+print_def_(OMX_PARAM_PORTDEFINITIONTYPE *def_ptr, FILE *out, int image)
 {
 	fprintf(out, "Port %u: %s %u/%u %u %u %s, %s, %s",
-			def.nPortIndex,
-			def.eDir == OMX_DirInput ? "in" : "out",
-			def.nBufferCountActual,
-			def.nBufferCountMin,
-			def.nBufferSize,
-			def.nBufferAlignment,
-			def.bEnabled ? "enabled" : "disabled",
-			def.bPopulated ? "populated" : "not populated",
-			def.bBuffersContiguous ? "contiguous" : "not contiguous");
+			def_ptr->nPortIndex,
+			def_ptr->eDir == OMX_DirInput ? "in" : "out",
+			def_ptr->nBufferCountActual,
+			def_ptr->nBufferCountMin,
+			def_ptr->nBufferSize,
+			def_ptr->nBufferAlignment,
+			def_ptr->bEnabled ? "enabled" : "disabled",
+			def_ptr->bPopulated ? "populated" : "not populated",
+			def_ptr->bBuffersContiguous ? "contiguous" : "not contiguous");
 if (image)
 	fprintf(out, " Image: %ux%u %ux%u fmt=%u %u\n",
-			def.format.image.nFrameWidth,
-			def.format.image.nFrameHeight,
-			def.format.image.nStride,
-			def.format.image.nSliceHeight,
-			def.format.image.eCompressionFormat,
-			def.format.image.eColorFormat);
+			def_ptr->format.image.nFrameWidth,
+			def_ptr->format.image.nFrameHeight,
+			def_ptr->format.image.nStride,
+			def_ptr->format.image.nSliceHeight,
+			def_ptr->format.image.eCompressionFormat,
+			def_ptr->format.image.eColorFormat);
 else
 	fprintf(out, " Video: %ux%u %ux%u @%u %u\n",
-			def.format.video.nFrameWidth,
-			def.format.video.nFrameHeight,
-			def.format.video.nStride,
-			def.format.video.nSliceHeight,
-			def.format.video.xFramerate >> 16,
-			def.format.video.eColorFormat);
+			def_ptr->format.video.nFrameWidth,
+			def_ptr->format.video.nFrameHeight,
+			def_ptr->format.video.nStride,
+			def_ptr->format.video.nSliceHeight,
+			def_ptr->format.video.xFramerate >> 16,
+			def_ptr->format.video.eColorFormat);
 }
 
 static void
-print_def(OMX_PARAM_PORTDEFINITIONTYPE def, FILE *out)
+print_def(OMX_PARAM_PORTDEFINITIONTYPE *def_ptr, FILE *out)
 {
-	print_def_(def, out, 0); // video by default
+	print_def_(def_ptr, out, 0); // video by default
 }
 
 int
@@ -158,7 +159,7 @@ video_encode_test(char *outputfilename)
 		exit(1);
 	}
 
-	print_def(def, stdout);
+	print_def(&def, stdout);
 
 	// Port 200: in 1/1 115200 16 enabled,not pop.,not cont. 320x240 320x240 @1966080 20
 	def.format.video.nFrameWidth = WIDTH;
@@ -168,7 +169,7 @@ video_encode_test(char *outputfilename)
 	def.format.video.nStride = def.format.video.nFrameWidth;
 	def.format.video.eColorFormat = OMX_COLOR_FormatYUV420PackedPlanar;
 
-	print_def(def, stdout);
+	print_def(&def, stdout);
 
 	r = OMX_SetParameter(ILC_GET_HANDLE(video_encode),
 						 OMX_IndexParamPortDefinition, &def);
@@ -335,6 +336,11 @@ capture_frame(void *out_buf, OMX_U32 *out_size);
 	(var).nVersion.nVersion = OMX_VERSION;\
 	(var).nPortIndex = (port);
 
+#define INIT_OMX_TYPE_PTR(var_ptr, type, port) memset((var_ptr), 0, sizeof(type));\
+	(var_ptr)->nSize = sizeof(type);\
+	(var_ptr)->nVersion.nVersion = OMX_VERSION;\
+	(var_ptr)->nPortIndex = (port);
+
 int
 capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, unsigned int bufsize)
 {
@@ -364,9 +370,9 @@ capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint fr
 	}
 
 	// create video_encode
-	if (ilclient_create_component(client, &video_encode, "video_encode", 
-		ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_INPUT_BUFFERS | ILCLIENT_ENABLE_OUTPUT_BUFFERS) != 0)
-		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for video_encode failed!\n")
+	if ((r_il = ilclient_create_component(client, &video_encode, "video_encode", 
+		ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_INPUT_BUFFERS | ILCLIENT_ENABLE_OUTPUT_BUFFERS)) != 0)
+		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for video_encode failed (%d)!\n")
 
 	list[0] = video_encode;
 
@@ -376,7 +382,7 @@ capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint fr
 	if ((r = OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
 		OMX_ERR_EXIT("%s:%d: OMX_GetParameter() for video_encode port 200 failed with %x!\n")
 
-	print_def(def, stderr);
+	print_def(&def, stderr);
 	// Port 200: in 1/1 115200 16 enabled,not pop.,not cont. 320x240 320x240 @1966080 20
 
 	def.nBufferSize = bufsize;
@@ -387,7 +393,7 @@ capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint fr
 	def.format.video.nStride = def.format.video.nFrameWidth;
 	def.format.video.eColorFormat = colorFormat; // OMX_COLOR_FormatYUV420PackedPlanar;
 
-	print_def(def, stderr);
+	print_def(&def, stderr);
 
 	if ((r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
 		OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for video_encode port 200 failed with %x!\n")
@@ -420,12 +426,12 @@ capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint fr
 		fprintf(stderr, "%s:%d: ilclient_change_component_state(video_encode, OMX_StateIdle) failed", __FUNCTION__, __LINE__);
 
 	fprintf(stderr, "enabling port buffers for 200...\n");
-	if (ilclient_enable_port_buffers(video_encode, 200, NULL, NULL, NULL) != 0)
-		ILC_ERR_EXIT("%s:%d: enabling port buffers for 200 failed!\n")
+	if ((r_il = ilclient_enable_port_buffers(video_encode, 200, NULL, NULL, NULL)) != 0)
+		ILC_ERR_EXIT("%s:%d: enabling port buffers for 200 failed (%d)!\n")
 
 	fprintf(stderr, "enabling port buffers for 201...\n");
-	if (ilclient_enable_port_buffers(video_encode, 201, NULL, NULL, NULL) != 0)
-		ILC_ERR_EXIT("%s:%d: enabling port buffers for 201 failed!\n")
+	if ((r_il = ilclient_enable_port_buffers(video_encode, 201, NULL, NULL, NULL)) != 0)
+		ILC_ERR_EXIT("%s:%d: enabling port buffers for 201 failed (%d)!\n")
 
 	fprintf(stderr, "encode to executing...\n");
 	ilclient_change_component_state(video_encode, OMX_StateExecuting);
@@ -489,11 +495,151 @@ capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint fr
 	return status;
 }
 
+//typedef struct _USERDATA {
+//	COMPONENT_T *video_encode;
+//	TUNNEL_T    *tunnel;
+//	int          tunnel_set;
+//} USERDATA;
+
+static void
+get_portdef(OMX_PARAM_PORTDEFINITIONTYPE *portdef_ptr, COMPONENT_T *comp, OMX_U32 port, int image)
+{
+	INIT_OMX_TYPE_PTR(portdef_ptr, OMX_PARAM_PORTDEFINITIONTYPE, port)
+	OMX_GetParameter(ILC_GET_HANDLE(comp), OMX_IndexParamPortDefinition, portdef_ptr);
+	print_def_(portdef_ptr, stderr, image);
+}
+
+static void
+set_portdef(OMX_PARAM_PORTDEFINITIONTYPE *portdef_ptr, COMPONENT_T *comp, OMX_U32 port, int image)
+{
+	OMX_ERRORTYPE r = OMX_SetParameter(ILC_GET_HANDLE(comp), OMX_IndexParamPortDefinition, portdef_ptr);
+	vc_assert(r == OMX_ErrorNone);
+	INIT_OMX_TYPE_PTR(portdef_ptr, OMX_PARAM_PORTDEFINITIONTYPE, port)
+	OMX_GetParameter(ILC_GET_HANDLE(comp), OMX_IndexParamPortDefinition, portdef_ptr);
+	print_def_(portdef_ptr, stderr, image);
+}
+
+static void 
+capture_encode_jpeg_port_settings(void *userdata, COMPONENT_T *comp, OMX_U32 port)
+{
+//	if (port == 321) {
+//
+//		int r_il;
+//		OMX_PARAM_PORTDEFINITIONTYPE portdef;
+//		// get image_decode output port definition - port 321
+//		get_portdef(&portdef, comp, 321, 1);
+//		// allocate buffers for port 321
+//		if ((r_il = ilclient_enable_port_buffers(comp, 321, NULL, NULL, NULL)) != 0)
+//			ILC_ERR_EXIT("%s:%d: enabling port buffers for 321 failed (%d)!\n")
+//		// move image_decode to executing
+//		fprintf(stderr, "move image_decode to executing\n");
+//		ilclient_change_component_state(comp, OMX_StateExecuting);
+//		fprintf(stderr, "leaving capture_encode_jpeg_port_settings\n");
+//
+//return;
+//		OMX_ERRORTYPE r;
+//		OMX_BUFFERHEADERTYPE *buf;
+//		OMX_BUFFERHEADERTYPE *out;
+//		fprintf(stderr, "1\n");
+//		out = ilclient_get_output_buffer(comp, 321, 1);
+//		fprintf(stderr, "2\n");
+//		if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(comp), out)) != OMX_ErrorNone) {
+//			fprintf(stderr, "Error filling buffer: %x\n", r);
+//		}
+//		fprintf(stderr, "3\n");
+//		buf = ilclient_get_input_buffer(((USERDATA *)userdata)->video_encode, 200, 1);
+//		if (buf == NULL) {
+//			fprintf(stderr, "Doh, no buffers for me!\n");
+//		}
+//		else {
+//			/* fill it */
+//			//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
+//			memcpy(buf->pBuffer, out->pBuffer, out->nFilledLen);
+//			buf->nFilledLen = out->nFilledLen;
+//			out->nFilledLen = 0;
+//			fprintf(stderr, "4\n");
+//			if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(((USERDATA *)userdata)->video_encode), buf)) != OMX_ErrorNone) {
+//				fprintf(stderr, "Error emptying buffer!\n");
+//			}
+//		}
+//return;
+//
+//		int r_il;
+//		if (!((USERDATA *)userdata)->tunnel_set) {
+//			// get image_decode output port definition - port 321
+//			OMX_PARAM_PORTDEFINITIONTYPE portdef;
+//			INIT_OMX_TYPE(portdef, OMX_PARAM_PORTDEFINITIONTYPE, 321)
+//			OMX_GetParameter(ILC_GET_HANDLE(comp), OMX_IndexParamPortDefinition, &portdef);
+//			print_def_(&portdef, stderr, 1);
+//	// get current settings of video_encode component from port 200
+//	INIT_OMX_TYPE(portdef, OMX_PARAM_PORTDEFINITIONTYPE, 200)
+//	OMX_GetParameter(ILC_GET_HANDLE(((USERDATA *)userdata)->video_encode), OMX_IndexParamPortDefinition, &portdef);
+//	print_def(&portdef, stderr);
+//			fprintf(stderr, "setup tunnel\n");
+//			if ((r_il = ilclient_setup_tunnel(((USERDATA *)userdata)->tunnel, 0, 0)) != 0)
+//				fprintf(stderr, "Error setting up tunnel: %d\n", r_il);
+//			((USERDATA *)userdata)->tunnel_set++;
+//		}
+//		else {
+//			ilclient_disable_tunnel(((USERDATA *)userdata)->tunnel);
+//			ilclient_enable_tunnel(((USERDATA *)userdata)->tunnel);
+//		}
+//	}
+//	else if (port == 201) {
+//return;
+//		OMX_ERRORTYPE r;
+//		OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(((USERDATA *)userdata)->video_encode, 201, 1);
+//
+//		if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(((USERDATA *)userdata)->video_encode), out)) != OMX_ErrorNone)
+//			fprintf(stderr, "Error filling buffer: %x\n", r);
+//
+//		if (out != NULL) {
+//			if (out->nFlags & OMX_BUFFERFLAG_CODECCONFIG) {
+//				int i;
+//				for (i = 0; i < out->nFilledLen; i++)
+//					fprintf(stderr, "%x ", out->pBuffer[i]);
+//				fprintf(stderr, "\n");
+//			}
+//
+//			size_t res = fwrite(out->pBuffer, 1, out->nFilledLen, stdout);
+//			if (res != out->nFilledLen)
+//				fprintf(stderr, "fwrite: Error emptying buffer: %d\n", res);
+//			//else
+//			//	fprintf(stderr, "Writing frame %d/%d\n", framenumber, frames);
+//
+//			out->nFilledLen = 0;
+//		}
+//		else
+//			fprintf(stderr, "Not getting it :(\n");
+//	}
+	if (port == 321) {
+
+		int r_il;
+		OMX_PARAM_PORTDEFINITIONTYPE portdef;
+
+		// get image_decode output port definition - port 321
+		get_portdef(&portdef, comp, 321, 1);
+		// allocate buffers for port 321
+		if ((r_il = ilclient_enable_port_buffers(comp, 321, NULL, NULL, NULL)) != 0)
+			ILC_ERR_EXIT("%s:%d: enabling port buffers for 321 failed (%d)!\n")
+		// move image_decode to executing
+		//fprintf(stderr, "move image_decode to executing\n");
+		//ilclient_change_component_state(comp, OMX_StateExecuting);
+		//fprintf(stderr, "leaving capture_encode_jpeg_port_settings\n");
+	}
+}
+
+//static void
+//capture_encode_jpeg_fill_buffer_done(void *data, COMPONENT_T *comp)
+//{
+//	*((int *)data) = 1;
+//}
+
 int
 capture_encode_jpeg_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, unsigned int bufsize)
 {
 	OMX_VIDEO_PARAM_PORTFORMATTYPE format;
-	OMX_PARAM_PORTDEFINITIONTYPE def;
+	OMX_PARAM_PORTDEFINITIONTYPE portdef;
 	COMPONENT_T *video_encode = NULL, *image_decode = NULL;
 	COMPONENT_T *list[5];
 	TUNNEL_T tunnel[4];
@@ -503,7 +649,7 @@ capture_encode_jpeg_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, ui
 	int r_il = 0;
 	ILCLIENT_T *client;
 	int status = 0;
-	int framenumber = 0;
+	int framenumber = 0, outframenumber = 0;
 
 	memset(list, 0, sizeof(list));
 
@@ -519,152 +665,194 @@ capture_encode_jpeg_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, ui
 	}
 
 	// create image_decode
-	if (ilclient_create_component(client, &image_decode, "image_decode", 
-		ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_INPUT_BUFFERS) != 0)
-		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for image_decode failed!\n")
+	if ((r_il = ilclient_create_component(client, &image_decode, "image_decode", ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_INPUT_BUFFERS | ILCLIENT_ENABLE_OUTPUT_BUFFERS)) != 0)
+		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for image_decode failed (%d)!\n")
 	list[0] = image_decode;
-	// get current settings of image_decode component from port 320
-	INIT_OMX_TYPE(def, OMX_PARAM_PORTDEFINITIONTYPE, 320)
-	if ((r = OMX_GetParameter(ILC_GET_HANDLE(image_decode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
-		OMX_ERR_EXIT("%s:%d: OMX_GetParameter() for image_decode port 320 failed with %x!\n")
-	print_def_(def, stderr, 1);
+
+	// move image_decode to idle
+	ilclient_change_component_state(image_decode, OMX_StateIdle);
+
+	// get image_decode input port definition - port 320
+	get_portdef(&portdef, image_decode, 320, 1);
 	// Port 320: in 3/2 81920 16 disabled, not populated, not contiguous Image: 0x0 0x0 fmt=6 0
-	// set eCompressionFormat = 2 (JPEG) and input buffer size
-	def.nBufferSize = bufsize;
-	def.format.image.eCompressionFormat = OMX_IMAGE_CodingJPEG;
-	if ((r = OMX_SetParameter(ILC_GET_HANDLE(image_decode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
-		OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for image_decode port 320 failed with %x!\n")
+	// set image_decode input buffer size - port 320
+	// set image_decode input image format - port 320
+	portdef.nBufferSize = bufsize;
+	portdef.format.image.eCompressionFormat = OMX_IMAGE_CodingJPEG;
+	set_portdef(&portdef, image_decode, 320, 1);
+
+	// get image_decode output port definition - port 321
+	get_portdef(&portdef, image_decode, 321, 1);
+	// set image_decode output image format - port 321
+	portdef.format.image.eCompressionFormat = OMX_IMAGE_CodingAutoDetect;
+	set_portdef(&portdef, image_decode, 321, 1);
+
+	// create image_decode input buffers - port 320
+	if ((r_il = ilclient_enable_port_buffers(image_decode, 320, NULL, NULL, NULL)) != 0)
+		ILC_ERR_EXIT("%s:%d: enabling port buffers for 320 failed (%d)!\n")
+
+	// move image_decode to executing
+	fprintf(stderr, "move image_decode to executing\n");
+	ilclient_change_component_state(image_decode, OMX_StateExecuting);
 
 	// create video_encode
-	if (ilclient_create_component(client, &video_encode, "video_encode", 
-		ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_OUTPUT_BUFFERS) != 0)
-		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for video_encode failed!\n")
+	if ((r_il = ilclient_create_component(client, &video_encode, "video_encode", ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_INPUT_BUFFERS | ILCLIENT_ENABLE_OUTPUT_BUFFERS)) != 0)
+		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for video_encode failed (%d)!\n")
 	list[1] = video_encode;
+
+	// move video_encode to idle
+	ilclient_change_component_state(video_encode, OMX_StateIdle);
+
 	// get current settings of video_encode component from port 200
-	INIT_OMX_TYPE(def, OMX_PARAM_PORTDEFINITIONTYPE, 200)
-	if ((r = OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
-		OMX_ERR_EXIT("%s:%d: OMX_GetParameter() for video_encode port 200 failed with %x!\n")
-	print_def(def, stderr);
+	get_portdef(&portdef, video_encode, 200, 0);
 	// Port 200: in 1/1 115200 16 enabled,not pop.,not cont. 320x240 320x240 @1966080 20
-	def.format.video.nFrameWidth = frameWidth;
-	def.format.video.nFrameHeight = frameHeight;
-	def.format.video.xFramerate = frameRate << 16; // 30 << 16;
-	def.format.video.nSliceHeight = def.format.video.nFrameHeight;
-	def.format.video.nStride = def.format.video.nFrameWidth;
-	def.format.video.eColorFormat = colorFormat; // OMX_COLOR_FormatYUV420PackedPlanar;
-	print_def(def, stderr);
-	if ((r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamPortDefinition, &def)) != OMX_ErrorNone)
-		OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for video_encode port 200 failed with %x!\n")
+	// set video_encode input image format - port 200
+	portdef.format.video.nFrameWidth = frameWidth;
+	portdef.format.video.nFrameHeight = frameHeight;
+	portdef.format.video.xFramerate = frameRate << 16; // 30 << 16;
+	portdef.format.video.nSliceHeight = portdef.format.video.nFrameHeight;
+	portdef.format.video.nStride = portdef.format.video.nFrameWidth;
+	portdef.format.video.eColorFormat = colorFormat; // OMX_COLOR_FormatYUV420PackedPlanar;
+	set_portdef(&portdef, video_encode, 200, 0);
+
 	// set video_encode codec to H.264
 	INIT_OMX_TYPE(format, OMX_VIDEO_PARAM_PORTFORMATTYPE, 201)
 	format.eCompressionFormat = OMX_VIDEO_CodingAVC;
-	fprintf(stderr, "OMX_SetParameter for video_encode:201...\n");
-	if ((r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoPortFormat, &format)) != OMX_ErrorNone)
-		OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for format for video_encode port 201 failed with %x!\n")
+	r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoPortFormat, &format);
+	vc_assert(r == OMX_ErrorNone);
+
 	// set current bitrate to 1Mbit
 	OMX_VIDEO_PARAM_BITRATETYPE bitrateType;
 	INIT_OMX_TYPE(bitrateType, OMX_VIDEO_PARAM_BITRATETYPE, 201)
 	bitrateType.eControlRate = OMX_Video_ControlRateVariable;
 	bitrateType.nTargetBitrate = 1000000;
-	if ((r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType)) != OMX_ErrorNone)
-		OMX_ERR_EXIT("%s:%d: OMX_SetParameter() for bitrate for video_encode port 201 failed with %x!\n")
+	r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType);
+	vc_assert(r == OMX_ErrorNone);
+
 	// get current bitrate
 	INIT_OMX_TYPE(bitrateType, OMX_VIDEO_PARAM_BITRATETYPE, 201)
-	if ((r = OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType)) != OMX_ErrorNone)
-		OMX_ERR_EXIT("%s:%d: OMX_GetParameter() for bitrate for video_encode port 201 failed with %x!\n")
-	fprintf(stderr, "Current Bitrate=%u\n",bitrateType.nTargetBitrate);
+	OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType);
+	fprintf(stderr, "Current Bitrate=%u\n", bitrateType.nTargetBitrate);
 
+	// create tunnel 321 -> 200
 	//set_tunnel(tunnel, image_decode, 321, video_encode, 200);
 
-	fprintf(stderr, "image decode to idle...\n");
-	if (ilclient_change_component_state(image_decode, OMX_StateIdle) == -1)
-		fprintf(stderr, "%s:%d: ilclient_change_component_state(image_decode, OMX_StateIdle) failed", __FUNCTION__, __LINE__);
+	// enabling port buffers for 201
+	if ((r_il = ilclient_enable_port_buffers(video_encode, 201, NULL, NULL, NULL)) != 0)
+		ILC_ERR_EXIT("%s:%d: enabling port buffers for 201 failed (%d)!\n")
 
-	fprintf(stderr, "enabling port buffers for 320...\n");
-	if (ilclient_enable_port_buffers(image_decode, 320, NULL, NULL, NULL) != 0)
-		ILC_ERR_EXIT("%s:%d: enabling port buffers for 320 failed!\n")
-
-	fprintf(stderr, "video encode to idle...\n");
-	if (ilclient_change_component_state(video_encode, OMX_StateIdle) == -1)
-		fprintf(stderr, "%s:%d: ilclient_change_component_state(video_encode, OMX_StateIdle) failed", __FUNCTION__, __LINE__);
-
-	fprintf(stderr, "enabling port buffers for 201...\n");
-	if (ilclient_enable_port_buffers(video_encode, 201, NULL, NULL, NULL) != 0)
-		ILC_ERR_EXIT("%s:%d: enabling port buffers for 201 failed!\n")
+	// create video_encode input buffers - port 200
+	if ((r_il = ilclient_enable_port_buffers(video_encode, 200, NULL, NULL, NULL)) != 0)
+		ILC_ERR_EXIT("%s:%d: enabling port buffers for 200 failed (%d)!\n")
 
 	//if ((r_il = ilclient_setup_tunnel(tunnel, 0, 0)) != 0)
-	//	ILC_ERR_EXIT("%s:%d: setting up tunnel failed (%i)!\n")
+	//	ILC_ERR_EXIT("%s:%d: setting up tunnel failed (%d)!\n")
 
-	fprintf(stderr, "image decode to executing...\n");
-	ilclient_change_component_state(image_decode, OMX_StateExecuting);
-
-	fprintf(stderr, " video encode to executing...\n");
+	// move video_encode to executing
 	ilclient_change_component_state(video_encode, OMX_StateExecuting);
 
-	fprintf(stderr, "looping for buffers...\n");
+	// set set_port_settings_callback
+	//fprintf(stderr, "set set_port_settings_callback\n");
+	//USERDATA userdata;
+	//userdata.tunnel = tunnel;
+	//userdata.video_encode = video_encode;
+	//userdata.tunnel_set = 0;
+	ilclient_set_port_settings_callback(client, capture_encode_jpeg_port_settings, NULL);
+
 	do {
-		buf = ilclient_get_input_buffer(image_decode, 320, 1);
-		if (buf == NULL) {
-			fprintf(stderr, "Doh, no buffers for me!\n");
+		//fprintf(stderr, "1. move image_decode to executing\n");
+		//ilclient_change_component_state(image_decode, OMX_StateExecuting);
+
+		fprintf(stderr, "2. get 320 in buffer from image_decode queue\n");
+		if ((buf = ilclient_get_input_buffer(image_decode, 320, 0)) != NULL) {
+			vc_assert(buf->nAllocLen >= bufsize);
+
+			if (framenumber < frames) {
+				/* fill it */
+				//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
+				capture_frame(buf->pBuffer, &buf->nFilledLen);
+				buf->nFlags = OMX_BUFFERFLAG_EOS;
+				framenumber++;
+				fprintf(stderr, "captured frame %d/%d (%d bytes)\n", framenumber, frames, buf->nFilledLen);
+
+				fprintf(stderr, "3. send filled 320 in buffer to image_decode processor\n");
+				if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
+					fprintf(stderr, "Error emptying buffer: %x\n", r);
+			}
 		}
-		else {
-			/* fill it */
-			//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
-			capture_frame(buf->pBuffer, &buf->nFilledLen);
-			framenumber++;
 
-			if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
-				fprintf(stderr, "Error emptying buffer: %x\n", r);
-
-			out = ilclient_get_output_buffer(image_decode, 321, 1);
-
-			if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(image_decode), out)) != OMX_ErrorNone)
-				fprintf(stderr, "Error filling buffer: %x\n", r);
-
+		fprintf(stderr, "4. get 321 out buffers from image_decode queue\n");
+		while ((out = ilclient_get_output_buffer(image_decode, 321, 0)) != NULL && out->nFilledLen == 0) {
+			fprintf(stderr, "5. send empty 321 out buffer to image_decode processor\n");
+			if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(image_decode), out)) != OMX_ErrorNone) {
+				fprintf(stderr, "Error filling 321 out buffer: %x\n", r);
+			}
+		}
+		if (out != NULL) {
+			fprintf(stderr, "6. get 200 in buffer from video_encode queue (blocking)\n");
 			buf = ilclient_get_input_buffer(video_encode, 200, 1);
 
-			while (out->nFilledLen == 0) {}
+			/* fill it */
+			//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
+			fprintf(stderr, "7. copy buffer 321 -> 200 (%d bytes)\n", out->nFilledLen);
 			memcpy(buf->pBuffer, out->pBuffer, out->nFilledLen);
+			buf->nFilledLen = out->nFilledLen;
 			out->nFilledLen = 0;
 
-			if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(video_encode), buf)) != OMX_ErrorNone)
-				fprintf(stderr, "Error emptying buffer: %x\n", r);
-
-			out = ilclient_get_output_buffer(video_encode, 201, 1);
-
-			if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(video_encode), out)) != OMX_ErrorNone)
-				fprintf(stderr, "Error filling buffer: %x\n", r);
-
-			if (out != NULL) {
-				if (out->nFlags & OMX_BUFFERFLAG_CODECCONFIG) {
-					int i;
-					for (i = 0; i < out->nFilledLen; i++)
-						fprintf(stderr, "%x ", out->pBuffer[i]);
-					fprintf(stderr, "\n");
-				}
-
-				size_t res = fwrite(out->pBuffer, 1, out->nFilledLen, stdout);
-				if (res != out->nFilledLen)
-					fprintf(stderr, "fwrite: Error emptying buffer: %d\n", res);
-				//else
-				//	fprintf(stderr, "Writing frame %d/%d\n", framenumber, frames);
-
-				out->nFilledLen = 0;
+			fprintf(stderr, "8. send emptied 321 out buffer to image_decode processor\n");
+			if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(image_decode), out)) != OMX_ErrorNone) {
+				fprintf(stderr, "Error filling 321 out buffer: %x\n", r);
 			}
-			else
-				fprintf(stderr, "Not getting it :(\n");
+
+			fprintf(stderr, "9. send filled 200 in buffer to video_encode processor\n");
+			if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(video_encode), buf)) != OMX_ErrorNone) {
+				fprintf(stderr, "Error emptying 200 in buffer: %x!\n", r);
+			}
+		}
+
+		fprintf(stderr, "10. get 201 out buffers from video_encode queue\n");
+		while ((out = ilclient_get_output_buffer(video_encode, 201, 0)) != NULL && out->nFilledLen == 0) {
+			fprintf(stderr, "11. send empty 201 out buffer to video_encode processor\n");
+			if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(video_encode), out)) != OMX_ErrorNone) {
+				fprintf(stderr, "Error filling 201 out buffer: %x\n", r);
+			}
+		}
+		if (out != NULL) {
+			if (out->nFlags & OMX_BUFFERFLAG_CODECCONFIG) {
+				int i;
+				for (i = 0; i < out->nFilledLen; i++)
+					fprintf(stderr, "%x ", out->pBuffer[i]);
+				fprintf(stderr, "\n");
+			}
+
+			fprintf(stderr, "12. write frame to stdout (%d bytes)\n", out->nFilledLen);
+			if ((r = fwrite(out->pBuffer, 1, out->nFilledLen, stdout)) != out->nFilledLen) {
+				fprintf(stderr, "fwrite: Error writing buffer to stdout: %d!\n", r);
+			}
+			else {
+				fprintf(stderr, "output frame %d\n", ++outframenumber);
+			}
+			fflush(stdout);
+			out->nFilledLen = 0;
+
+			fprintf(stderr, "13. send emptied 201 out buffer to video_encode processor\n");
+			if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(video_encode), out)) != OMX_ErrorNone) {
+				fprintf(stderr, "Error filling 201 out buffer: %x\n", r);
+			}
 		}
 	}
-	while (framenumber < frames);
+	while (framenumber < frames || out != NULL);
 
 	fprintf(stderr, "Teardown.\n");
 
-	fprintf(stderr, "disabling port buffers for 320 and 201...\n");
+	fprintf(stderr, "disabling port buffers for 320, 321, 200 and 201...\n");
 	ilclient_disable_port_buffers(image_decode, 320, NULL, NULL, NULL);
+	ilclient_disable_port_buffers(image_decode, 321, NULL, NULL, NULL);
+	ilclient_disable_port_buffers(video_encode, 200, NULL, NULL, NULL);
 	ilclient_disable_port_buffers(video_encode, 201, NULL, NULL, NULL);
 
-	ilclient_disable_tunnel(tunnel);
-	ilclient_teardown_tunnels(tunnel);
+	//ilclient_disable_tunnel(tunnel);
+	//ilclient_teardown_tunnels(tunnel);
 
 	ilclient_state_transition(list, OMX_StateIdle);
 	ilclient_state_transition(list, OMX_StateLoaded);
