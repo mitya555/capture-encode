@@ -713,7 +713,8 @@ tunnel_buffer(COMPONENT_T *image_decode, COMPONENT_T *video_encode, int *copybuf
 		memcpy(buf->pBuffer, out->pBuffer, out->nFilledLen);
 		buf->nFilledLen = out->nFilledLen;
 		out->nFilledLen = 0;
-		INFO_PRINT_2("copied frame %d (%d bytes)\n", ++(*copybuffernumber), buf->nFilledLen)
+		(*copybuffernumber)++;
+		INFO_PRINT_2("copied frame %d (%d bytes)\n", (*copybuffernumber), buf->nFilledLen)
 
 		DEBUG_PRINT("8. send emptied 321 out buffer to image_decode processor\n")
 		if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(image_decode), out)) != OMX_ErrorNone) {
@@ -899,7 +900,8 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 				fprintf(stderr, "fwrite: Error writing buffer to stdout: %d!\n", r);
 			}
 			else {
-				INFO_PRINT_2("output frame %d (%d bytes)\n", ++outframenumber, out->nFilledLen)
+				outframenumber++;
+				INFO_PRINT_2("output frame %d (%d bytes)\n", outframenumber, out->nFilledLen)
 			}
 			fflush(stdout);
 			out->nFilledLen = 0;
