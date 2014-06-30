@@ -60,7 +60,7 @@ static OMX_COLOR_FORMATTYPE img_fmt = OMX_COLOR_FormatYUV420PackedPlanar;
 static int              img_width = 640, img_height = 480;
 static int              frame_count = 100;
 
-static void time_diff(struct timespec *start, struct timespec *end, struct timespec *result)
+void time_diff(struct timespec *start, struct timespec *end, struct timespec *result)
 {
 	if (end->tv_nsec < start->tv_nsec) {
 		result->tv_sec = end->tv_sec - start->tv_sec - 1;
@@ -319,7 +319,7 @@ static void uninit_device(void)
 	free(buffers);
 }
 
-static void init_read(unsigned int buffer_size, int external_read_buffer)
+static void init_read(unsigned int buffer_size, int external_buffers)
 {
 	buffers = calloc(1, sizeof(*buffers));
 
@@ -329,7 +329,7 @@ static void init_read(unsigned int buffer_size, int external_read_buffer)
 	}
 
 	buffers[0].length = buffer_size;
-	if (!external_read_buffer) {
+	if (!external_buffers) {
 		buffers[0].start = malloc(buffer_size);
 
 		if (!buffers[0].start) {
@@ -392,12 +392,26 @@ static void init_mmap(void)
 	}
 }
 
-static void init_userp(unsigned int buffer_size)
+static uint buffer_count(OMX_BUFFERHEADERTYPE *external_buffers, OMX_U32 input_port)
+{
+	if (!external_buffers)
+		return 4;
+	uint cnt = 0;
+	do {
+		if (external_buffers->nInputPortIndex == input_port)
+			cnt++;
+	} while ((external_buffers = external_buffers->pAppPrivate));
+	return cnt;
+}
+
+static void init_userp(unsigned int buffer_size, OMX_BUFFERHEADERTYPE *external_buffers, OMX_U32 input_port)
 {
 	struct v4l2_requestbuffers req;
 
+	uint buffers_count = buffer_count(external_buffers, input_port);
+
 	CLEAR(req);
-	req.count  = 4;
+	req.count = buffers_count; // 4;
 	req.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	req.memory = V4L2_MEMORY_USERPTR;
 
@@ -409,14 +423,14 @@ static void init_userp(unsigned int buffer_size)
 			errno_exit("VIDIOC_REQBUFS");
 	}
 
-	buffers = calloc(4, sizeof(*buffers));
+	buffers = calloc(buffers_count, sizeof(*buffers));
 
 	if (!buffers) {
 		fprintf(stderr, "Out of memory\n");
 		exit(EXIT_FAILURE);
 	}
 
-	for (n_buffers = 0; n_buffers < 4; ++n_buffers) {
+	for (n_buffers = 0; n_buffers < /*4*/buffers_count; ++n_buffers) {
 		buffers[n_buffers].length = buffer_size;
 		buffers[n_buffers].start = malloc(buffer_size);
 
@@ -427,7 +441,7 @@ static void init_userp(unsigned int buffer_size)
 	}
 }
 
-static unsigned int init_device(int external_read_buffer)
+static unsigned int init_device(int external_buffers)
 {
 	struct v4l2_capability cap;
 	struct v4l2_cropcap cropcap;
@@ -506,7 +520,7 @@ static unsigned int init_device(int external_read_buffer)
 
 	switch (io) {
 	case IO_METHOD_READ:
-		init_read(fmt.fmt.pix.sizeimage, external_read_buffer);
+		init_read(fmt.fmt.pix.sizeimage, external_buffers);
 		break;
 
 	case IO_METHOD_MMAP:
@@ -514,7 +528,7 @@ static unsigned int init_device(int external_read_buffer)
 		break;
 
 	case IO_METHOD_USERPTR:
-		init_userp(fmt.fmt.pix.sizeimage);
+		init_userp(fmt.fmt.pix.sizeimage, NULL, 0);
 		break;
 	}
 
@@ -605,7 +619,7 @@ extern int
 capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, unsigned int bufsize);
 
 extern int
-capture_encode_jpeg_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, unsigned int bufsize);
+capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat,*/ unsigned int bufsize);
 
 int main(int argc, char **argv)
 {
@@ -720,7 +734,7 @@ int main(int argc, char **argv)
 	start_capturing();
 	if (encode) {
 		bcm_host_init();
-		capture_encode_jpeg_loop(frame_count, img_width, img_height, 14, img_fmt, bufsize); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
+		capture_encode_jpeg_loop(frame_count, /*img_width, img_height, 14, img_fmt,*/ bufsize); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
 		bcm_host_deinit();
 		if (fps_avg)
 			report_fps_avg();
