@@ -538,6 +538,8 @@ disable_port_buffers(COMPONENT_T *comp, OMX_U32 port) {
 
 //#define DEBUG
 
+//#define INFO
+
 #ifdef DEBUG
 #define DEBUG_PRINT(x) fprintf(stderr, (x));
 #define DEBUG_PRINT_1(x,y) fprintf(stderr, (x), (y));
@@ -546,7 +548,13 @@ disable_port_buffers(COMPONENT_T *comp, OMX_U32 port) {
 #define DEBUG_PRINT_1(x,y)
 #endif /* DEBUG */
 
-static void
+#ifdef INFO
+#define INFO_PRINT_2(x,y,z) fprintf(stderr, (x), (y), (z));
+#else
+#define INFO_PRINT_2(x,y,z)
+#endif /* INFO */
+
+static int
 image_decode_init(COMPONENT_T *image_decode, uint bufsize) {
 
 	OMX_PARAM_PORTDEFINITIONTYPE portdef;
@@ -557,8 +565,11 @@ image_decode_init(COMPONENT_T *image_decode, uint bufsize) {
 	// set image_decode input buffer size and image format - port 320
 	if (portdef.nBufferSize < bufsize)
 		portdef.nBufferSize = bufsize;
+	//portdef.nBufferCountMin = portdef.nBufferCountActual = 1;
 	portdef.format.image.eCompressionFormat = OMX_IMAGE_CodingJPEG;
 	set_portdef(&portdef, image_decode, 320, 1);
+
+	int inputbuffernumber = portdef.nBufferCountActual;
 
 	// get image_decode output port definition - port 321
 	get_portdef(&portdef, image_decode, 321, 1);
@@ -573,6 +584,8 @@ image_decode_init(COMPONENT_T *image_decode, uint bufsize) {
 	// move image_decode to executing
 	fprintf(stderr, "move image_decode to executing\n");
 	ilclient_change_component_state(image_decode, OMX_StateExecuting);
+
+	return inputbuffernumber;
 }
 
 static void
@@ -696,11 +709,11 @@ tunnel_buffer(COMPONENT_T *image_decode, COMPONENT_T *video_encode, int *copybuf
 
 		/* fill it */
 		//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
-		DEBUG_PRINT_1("7. copy buffer 321 -> 200 (%d bytes)\n", out->nFilledLen)
+		DEBUG_PRINT_1("7. copy buffer 321->200 (%d bytes)\n", out->nFilledLen)
 		memcpy(buf->pBuffer, out->pBuffer, out->nFilledLen);
 		buf->nFilledLen = out->nFilledLen;
 		out->nFilledLen = 0;
-		fprintf(stderr, "copied 321->200 buffer %d (%d bytes)\n", ++(*copybuffernumber), buf->nFilledLen);
+		INFO_PRINT_2("copied frame %d (%d bytes)\n", ++(*copybuffernumber), buf->nFilledLen)
 
 		DEBUG_PRINT("8. send emptied 321 out buffer to image_decode processor\n")
 		if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(image_decode), out)) != OMX_ErrorNone) {
@@ -728,6 +741,29 @@ capture_encode_jpeg_fill_buffer_done(void *data, COMPONENT_T *comp) {
 	FILL_BUFFER_DONE_DATA *filldata = (FILL_BUFFER_DONE_DATA *)data;
 	if (comp == /*image_decode*/filldata->tunnel->source)
 		tunnel_buffer(comp, /*video_encode*/filldata->tunnel->sink, filldata->copybuffernumber, 0);
+}
+
+static uint 
+input_buffer_count(OMX_BUFFERHEADERTYPE *list)
+{
+	uint cnt = 0;
+	while (list) {
+		cnt++;
+		list = list->pAppPrivate;
+	}
+	return cnt;
+}
+
+static int
+get_input_buffers(COMPONENT_T *image_decode, OMX_U32 port, int block, int buffernumber, OMX_BUFFERHEADERTYPE **list) {
+	OMX_BUFFERHEADERTYPE *buf;
+	int cnt = input_buffer_count(*list);
+	while (cnt < buffernumber && (buf = ilclient_get_input_buffer(image_decode, port, block)) != NULL) {
+		buf->pAppPrivate = *list;
+		*list = buf;
+		cnt++;
+	}
+	return cnt;
 }
 
 int
@@ -770,7 +806,7 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	// move image_decode to idle
 	ilclient_change_component_state(image_decode, OMX_StateIdle);
 
-	image_decode_init(image_decode, bufsize);
+	int inputbuffernumber = image_decode_init(image_decode, bufsize);
 
 	// create video_encode
 	if ((r_il = ilclient_create_component(client, &video_encode, "video_encode", ILCLIENT_DISABLE_ALL_PORTS
@@ -799,6 +835,8 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	filldata.copybuffernumber = &copybuffernumber;
 	ilclient_set_fill_buffer_done_callback(client, capture_encode_jpeg_fill_buffer_done, &filldata);
 
+	OMX_BUFFERHEADERTYPE *inlist = NULL;
+
 	do {
 		struct timespec capture_time;
 
@@ -806,18 +844,25 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 		//ilclient_change_component_state(image_decode, OMX_StateExecuting);
 
 		DEBUG_PRINT("2. get 320 in buffer from image_decode queue\n")
-		if (/*framenumber - 3 < copybuffernumber &&*/ (buf = ilclient_get_input_buffer(image_decode, 320, 0)) != NULL) {
-			vc_assert(buf->nAllocLen >= bufsize);
+		//if ((buf = ilclient_get_input_buffer(image_decode, 320, 0)) != NULL) {
+		//	vc_assert(buf->nAllocLen >= bufsize);
+		//
+		if (get_input_buffers(image_decode, 320, 0, inputbuffernumber, &inlist) == inputbuffernumber) {
 
 			if (framenumber < frames) {
+
+				/* take a buffer from inlist */
+				buf = inlist;
+				inlist = inlist->pAppPrivate;
+				buf->pAppPrivate = NULL;
+
 				/* fill it */
 				//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
 				capture_frame(buf->pBuffer, &buf->nFilledLen);
 				buf->nFlags = OMX_BUFFERFLAG_EOS;
 				framenumber++;
-				if (framenumber == frames)
-					clock_gettime(CLOCK_MONOTONIC, &capture_time);
-				fprintf(stderr, "captured frame %d/%d (%d bytes)\n", framenumber, frames, buf->nFilledLen);
+				clock_gettime(CLOCK_MONOTONIC, &capture_time);
+				INFO_PRINT_2("captured frame %d (%d bytes)\n", framenumber, buf->nFilledLen)
 
 				DEBUG_PRINT("3. send filled 320 in buffer to image_decode processor\n")
 				if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
@@ -854,7 +899,7 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 				fprintf(stderr, "fwrite: Error writing buffer to stdout: %d!\n", r);
 			}
 			else {
-				fprintf(stderr, "output frame %d\n", ++outframenumber);
+				INFO_PRINT_2("output frame %d (%d bytes)\n", ++outframenumber, out->nFilledLen)
 			}
 			fflush(stdout);
 			out->nFilledLen = 0;
@@ -865,15 +910,32 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 			}
 		}
 
-		if (framenumber == frames) {
+		if (framenumber >= frames) {
 			get_time_diff(&capture_time, &diff);
 			wait_timeout(0, 1000);
 			fprintf(stderr, "\r%.2f ", (1000000000.0 * diff.tv_sec + diff.tv_nsec) / 1000000000.0);
 		}
 	}
-	while (framenumber < frames || out != NULL || diff.tv_sec < 3);
+	while (framenumber < frames || out != NULL || diff.tv_sec < 1);
+
+	fprintf(stderr, "\ninput frames: %d\ncopied frames: %d\noutput frames: %d\n\n", framenumber, copybuffernumber, outframenumber);
 
 	fprintf(stderr, "Teardown.\n");
+
+	// remove callback function
+	ilclient_set_fill_buffer_done_callback(client, NULL, NULL);
+
+	// release empty port 320 input buffers back to image_decode processor
+	DEBUG_PRINT("release empty port 320 input buffers back to image_decode processor\n")
+	while (inlist) {
+		/* take a buffer from inlist */
+		buf = inlist;
+		inlist = inlist->pAppPrivate;
+		buf->pAppPrivate = NULL;
+		/* release it */
+		if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
+			fprintf(stderr, "Error emptying buffer: %x\n", r);
+	}
 
 	disable_port_buffers(image_decode, 320);
 	disable_port_buffers(image_decode, 321);
