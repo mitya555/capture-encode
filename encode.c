@@ -745,7 +745,7 @@ capture_encode_jpeg_fill_buffer_done(void *data, COMPONENT_T *comp) {
 }
 
 static uint 
-input_buffer_count(OMX_BUFFERHEADERTYPE *list)
+buffer_list_count(OMX_BUFFERHEADERTYPE *list)
 {
 	uint cnt = 0;
 	while (list) {
@@ -755,10 +755,19 @@ input_buffer_count(OMX_BUFFERHEADERTYPE *list)
 	return cnt;
 }
 
+static OMX_BUFFERHEADERTYPE *
+take_buffer_out_of_list(OMX_BUFFERHEADERTYPE **list) {
+	/* take a buffer out of list */
+	OMX_BUFFERHEADERTYPE *buf = *list;
+	*list = buf->pAppPrivate;
+	buf->pAppPrivate = NULL;
+	return buf;
+}
+
 static int
 get_input_buffers(COMPONENT_T *image_decode, OMX_U32 port, int block, int buffernumber, OMX_BUFFERHEADERTYPE **list) {
 	OMX_BUFFERHEADERTYPE *buf;
-	int cnt = input_buffer_count(*list);
+	int cnt = buffer_list_count(*list);
 	while (cnt < buffernumber && (buf = ilclient_get_input_buffer(image_decode, port, block)) != NULL) {
 		buf->pAppPrivate = *list;
 		*list = buf;
@@ -836,7 +845,7 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	filldata.copybuffernumber = &copybuffernumber;
 	ilclient_set_fill_buffer_done_callback(client, capture_encode_jpeg_fill_buffer_done, &filldata);
 
-	OMX_BUFFERHEADERTYPE *inlist = NULL;
+	OMX_BUFFERHEADERTYPE *inputbufferlist = NULL;
 
 	do {
 		struct timespec capture_time;
@@ -848,14 +857,12 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 		//if ((buf = ilclient_get_input_buffer(image_decode, 320, 0)) != NULL) {
 		//	vc_assert(buf->nAllocLen >= bufsize);
 		//
-		if (get_input_buffers(image_decode, 320, 0, inputbuffernumber, &inlist) == inputbuffernumber) {
+		if (get_input_buffers(image_decode, 320, 0, inputbuffernumber, &inputbufferlist) == inputbuffernumber) {
 
 			if (framenumber < frames) {
 
-				/* take a buffer from inlist */
-				buf = inlist;
-				inlist = inlist->pAppPrivate;
-				buf->pAppPrivate = NULL;
+				/* take a buffer out of inputbufferlist */
+				buf = take_buffer_out_of_list(&inputbufferlist);
 
 				/* fill it */
 				//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
@@ -888,12 +895,15 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 			}
 		}
 		if (out != NULL) {
+
+#ifdef DEBUG
 			if (out->nFlags & OMX_BUFFERFLAG_CODECCONFIG) {
 				int i;
 				for (i = 0; i < out->nFilledLen; i++)
 					fprintf(stderr, "%x ", out->pBuffer[i]);
 				fprintf(stderr, "\n");
 			}
+#endif
 
 			DEBUG_PRINT_1("12. write frame to stdout (%d bytes)\n", out->nFilledLen)
 			if ((r = fwrite(out->pBuffer, 1, out->nFilledLen, stdout)) != out->nFilledLen) {
@@ -920,7 +930,7 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	}
 	while (framenumber < frames || out != NULL || diff.tv_sec < 1);
 
-	fprintf(stderr, "\ninput frames: %d\ncopied frames: %d\noutput frames: %d\n\n", framenumber, copybuffernumber, outframenumber);
+	fprintf(stderr, "\r          \ninput frames: %d\ncopied frames: %d\noutput frames: %d\n\n", framenumber, copybuffernumber, outframenumber);
 
 	fprintf(stderr, "Teardown.\n");
 
@@ -929,11 +939,9 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 
 	// release empty port 320 input buffers back to image_decode processor
 	DEBUG_PRINT("release empty port 320 input buffers back to image_decode processor\n")
-	while (inlist) {
-		/* take a buffer from inlist */
-		buf = inlist;
-		inlist = inlist->pAppPrivate;
-		buf->pAppPrivate = NULL;
+	while (inputbufferlist) {
+		/* take a buffer out of inputbufferlist */
+		buf = take_buffer_out_of_list(&inputbufferlist);
 		/* release it */
 		if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
 			fprintf(stderr, "Error emptying buffer: %x\n", r);
