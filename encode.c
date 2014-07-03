@@ -335,8 +335,8 @@ video_encode_test(char *outputfilename)
 	return status;
 }
 
-extern void
-capture_frame(void *out_buf, OMX_U32 *out_size);
+extern OMX_BUFFERHEADERTYPE *
+capture_frame(OMX_BUFFERHEADERTYPE *buf_list);
 
 #define OMX_ERR_EXIT(fmt_str) {\
 		fprintf(stderr, fmt_str, __FUNCTION__, __LINE__, r);\
@@ -461,7 +461,7 @@ capture_encode_loop(int frames, OMX_U32 frameWidth, OMX_U32 frameHeight, uint fr
 		else {
 			/* fill it */
 			//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
-			capture_frame(buf->pBuffer, &buf->nFilledLen);
+			capture_frame(buf);
 			framenumber++;
 
 			if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(video_encode), buf)) != OMX_ErrorNone)
@@ -756,12 +756,26 @@ buffer_list_count(OMX_BUFFERHEADERTYPE *list)
 }
 
 static OMX_BUFFERHEADERTYPE *
-take_buffer_out_of_list(OMX_BUFFERHEADERTYPE **list) {
-	/* take a buffer out of list */
-	OMX_BUFFERHEADERTYPE *buf = *list;
-	*list = buf->pAppPrivate;
-	buf->pAppPrivate = NULL;
-	return buf;
+buffer_list_get_buf_remove(OMX_BUFFERHEADERTYPE **list, OMX_BUFFERHEADERTYPE *buf) {
+	/* take the buf buffer out of the list */
+	if (list != NULL && *list != NULL) {
+		if (buf == *list) {
+			*list = buf->pAppPrivate;
+			buf->pAppPrivate = NULL;
+			return buf;
+		}
+		else {
+			OMX_BUFFERHEADERTYPE *ptr = *list;
+			while (ptr != NULL && ptr->pAppPrivate != buf)
+				ptr = ptr->pAppPrivate;
+			if (ptr != NULL) {
+				ptr->pAppPrivate = buf->pAppPrivate;
+				buf->pAppPrivate = NULL;
+				return buf;
+			}
+		}
+	}
+	return NULL;
 }
 
 static int
@@ -776,8 +790,17 @@ get_input_buffers(COMPONENT_T *image_decode, OMX_U32 port, int block, int buffer
 	return cnt;
 }
 
+extern unsigned int 
+init_device(void);
+
+extern void 
+init_buffers(unsigned int buffer_size, OMX_BUFFERHEADERTYPE *external_buffers);
+
+extern void 
+start_capturing(void);
+
 int
-capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat,*/ uint bufsize) {
+capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, uint bufsize*/) {
 	COMPONENT_T *video_encode = NULL, *image_decode = NULL;
 	COMPONENT_T *list[5];
 	TUNNEL_T tunnel[4];
@@ -816,6 +839,9 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	// move image_decode to idle
 	ilclient_change_component_state(image_decode, OMX_StateIdle);
 
+	unsigned int bufsize = init_device();
+	fprintf(stderr, "capture buffer size: %d\n", bufsize);
+
 	int inputbuffernumber = image_decode_init(image_decode, bufsize);
 
 	// create video_encode
@@ -846,6 +872,7 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	ilclient_set_fill_buffer_done_callback(client, capture_encode_jpeg_fill_buffer_done, &filldata);
 
 	OMX_BUFFERHEADERTYPE *inputbufferlist = NULL;
+	int capturing_initialized = 0;
 
 	do {
 		struct timespec capture_time;
@@ -861,12 +888,20 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 
 			if (framenumber < frames) {
 
-				/* take a buffer out of inputbufferlist */
-				buf = take_buffer_out_of_list(&inputbufferlist);
+				if (!capturing_initialized) {
+					DEBUG_PRINT("initialize buffers and start capturing\n")
+					init_buffers(bufsize, inputbufferlist);
+					start_capturing();
+					capturing_initialized++;
+				}
 
 				/* fill it */
 				//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
-				capture_frame(buf->pBuffer, &buf->nFilledLen);
+				buf = capture_frame(inputbufferlist);
+
+				/* take a buffer out of inputbufferlist */
+				buffer_list_get_buf_remove(&inputbufferlist, buf);
+
 				buf->nFlags = OMX_BUFFERFLAG_EOS;
 				framenumber++;
 				clock_gettime(CLOCK_MONOTONIC, &capture_time);
@@ -876,6 +911,12 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 				if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
 					fprintf(stderr, "Error emptying buffer: %x\n", r);
 			}
+		}
+
+		if (framenumber >= frames) {
+			get_time_diff(&capture_time, &diff);
+			wait_timeout(0, 1000);
+			fprintf(stderr, "\r%.2f ", (1000000000.0 * diff.tv_sec + diff.tv_nsec) / 1000000000.0);
 		}
 
 		OMX_STATETYPE state;
@@ -921,14 +962,8 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 				fprintf(stderr, "Error filling 201 out buffer: %x\n", r);
 			}
 		}
-
-		if (framenumber >= frames) {
-			get_time_diff(&capture_time, &diff);
-			wait_timeout(0, 1000);
-			fprintf(stderr, "\r%.2f ", (1000000000.0 * diff.tv_sec + diff.tv_nsec) / 1000000000.0);
-		}
 	}
-	while (framenumber < frames || out != NULL || diff.tv_sec < 1);
+	while (framenumber < frames || /*out != NULL ||*/ diff.tv_sec < 1);
 
 	fprintf(stderr, "\r          \ninput frames: %d\ncopied frames: %d\noutput frames: %d\n\n", framenumber, copybuffernumber, outframenumber);
 
@@ -941,7 +976,7 @@ capture_encode_jpeg_loop(int frames, /*OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	DEBUG_PRINT("release empty port 320 input buffers back to image_decode processor\n")
 	while (inputbufferlist) {
 		/* take a buffer out of inputbufferlist */
-		buf = take_buffer_out_of_list(&inputbufferlist);
+		buf = buffer_list_get_buf_remove(&inputbufferlist, inputbufferlist);
 		/* release it */
 		if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
 			fprintf(stderr, "Error emptying buffer: %x\n", r);
