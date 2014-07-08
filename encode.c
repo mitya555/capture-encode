@@ -538,7 +538,7 @@ disable_port_buffers(COMPONENT_T *comp, OMX_U32 port) {
 
 //#define DEBUG
 
-//#define INFO
+#define INFO
 
 #ifdef DEBUG
 #define DEBUG_PRINT(x) fprintf(stderr, (x));
@@ -654,8 +654,16 @@ video_encode_init(COMPONENT_T *video_encode, OMX_U32 frameWidth, OMX_U32 frameHe
 	ilclient_change_component_state(video_encode, OMX_StateExecuting);
 }
 
+static void
+capture_encode_jpeg_error_callback(void *userdata, COMPONENT_T *comp, OMX_U32 error) {
+
+	TUNNEL_T *tunnel = (TUNNEL_T *)userdata;
+
+	INFO_PRINT_2("Error: 0x%X (%s)\n", error, comp == tunnel->source ? "image_decode" : "video_encode");
+}
+
 static void 
-capture_encode_jpeg_port_settings(void *userdata, COMPONENT_T *comp, OMX_U32 port) {
+capture_encode_jpeg_port_settings_callback(void *userdata, COMPONENT_T *comp, OMX_U32 port) {
 
 	TUNNEL_T *tunnel = (TUNNEL_T *)userdata;
 
@@ -738,7 +746,7 @@ typedef struct _FILL_BUFFER_DONE_DATA {
 } FILL_BUFFER_DONE_DATA;
 
 static void
-capture_encode_jpeg_fill_buffer_done(void *data, COMPONENT_T *comp) {
+capture_encode_jpeg_fill_buffer_done_callback(void *data, COMPONENT_T *comp) {
 	FILL_BUFFER_DONE_DATA *filldata = (FILL_BUFFER_DONE_DATA *)data;
 	if (comp == /*image_decode*/filldata->tunnel->source)
 		tunnel_buffer(comp, /*video_encode*/filldata->tunnel->sink, filldata->copybuffernumber, 0);
@@ -863,13 +871,16 @@ capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	set_tunnel(tunnel, image_decode, 321, video_encode, 200);
 
 	// set set_port_settings_callback
-	ilclient_set_port_settings_callback(client, capture_encode_jpeg_port_settings, tunnel);
+	ilclient_set_port_settings_callback(client, capture_encode_jpeg_port_settings_callback, tunnel);
 
-	// set set_port_settings_callback
+	// set fill_buffer_done_callback
 	FILL_BUFFER_DONE_DATA filldata;
 	filldata.tunnel = tunnel;
 	filldata.copybuffernumber = &copybuffernumber;
-	ilclient_set_fill_buffer_done_callback(client, capture_encode_jpeg_fill_buffer_done, &filldata);
+	ilclient_set_fill_buffer_done_callback(client, capture_encode_jpeg_fill_buffer_done_callback, &filldata);
+
+	// set error_callback
+	ilclient_set_error_callback(client, capture_encode_jpeg_error_callback, tunnel);
 
 	OMX_BUFFERHEADERTYPE *inputbufferlist = NULL;
 	int capturing_initialized = 0;

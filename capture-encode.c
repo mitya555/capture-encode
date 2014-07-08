@@ -30,6 +30,187 @@
 #include "bcm_host.h"
 #include "ilclient.h"
 
+/*
+* MJPEG/AVI1 to JPEG/JFIF bitstream format filter
+* Copyright (c) 2010 Adrian Daerr and Nicolas George
+*
+* This file is part of Libav.
+*
+* Libav is free software; you can redistribute it and/or
+* modify it under the terms of the GNU Lesser General Public
+* License as published by the Free Software Foundation; either
+* version 2.1 of the License, or (at your option) any later version.
+*
+* Libav is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+* Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public
+* License along with Libav; if not, write to the Free Software
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+*/
+
+/*
+* Adapted from mjpeg2jpeg.c, with original copyright:
+* Paris 2010 Adrian Daerr, public domain
+*/
+
+//#include <string.h>
+//#include "avcodec.h"
+//#include "mjpeg.h"
+
+/* Set up the standard Huffman tables (cf. JPEG standard section K.3) */
+/* IMPORTANT: these are only valid for 8-bit data precision! */
+const uint8_t ff_mjpeg_bits_dc_luminance[17] =
+{ /* 0-base */ 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
+const uint8_t ff_mjpeg_val_dc[12] =
+{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+
+const uint8_t ff_mjpeg_bits_dc_chrominance[17] =
+{ /* 0-base */ 0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 };
+
+const uint8_t ff_mjpeg_bits_ac_luminance[17] =
+{ /* 0-base */ 0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d };
+const uint8_t ff_mjpeg_val_ac_luminance[] =
+{ 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
+  0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
+  0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
+  0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0,
+  0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16,
+  0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
+  0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+  0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
+  0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+  0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
+  0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
+  0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+  0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98,
+  0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+  0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+  0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5,
+  0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4,
+  0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
+  0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
+  0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+  0xf9, 0xfa
+};
+
+const uint8_t ff_mjpeg_bits_ac_chrominance[17] =
+{ /* 0-base */ 0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77 };
+
+const uint8_t ff_mjpeg_val_ac_chrominance[] =
+{ 0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
+  0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
+  0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
+  0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0,
+  0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34,
+  0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
+  0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38,
+  0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+  0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+  0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
+  0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78,
+  0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+  0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96,
+  0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
+  0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
+  0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
+  0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2,
+  0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
+  0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9,
+  0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+  0xf9, 0xfa
+};
+
+static const uint8_t jpeg_header[] = {
+	0xff, 0xd8,                     // SOI
+	0xff, 0xe0,                     // APP0
+	0x00, 0x10,                     // APP0 header size (including
+	// this field, but excluding preceding)
+	0x4a, 0x46, 0x49, 0x46, 0x00,   // ID string 'JFIF\0'
+	0x01, 0x01,                     // version
+	0x00,                           // bits per type
+	0x00, 0x00,                     // X density
+	0x00, 0x00,                     // Y density
+	0x00,                           // X thumbnail size
+	0x00,                           // Y thumbnail size
+};
+
+static const int dht_segment_size = 420;
+static const uint8_t dht_segment_head[] = { 0xFF, 0xC4, 0x01, 0xA2, 0x00 };
+static const uint8_t dht_segment_frag[] = {
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+	0x0a, 0x0b, 0x01, 0x00, 0x03, 0x01, 0x01, 0x01, 0x01, 0x01,
+	0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static uint8_t *append(uint8_t *buf, const uint8_t *src, int size)
+{
+	memcpy(buf, src, size);
+	return buf + size;
+}
+
+static uint8_t *append_dht_segment(uint8_t *buf)
+{
+	buf = append(buf, dht_segment_head, sizeof(dht_segment_head));
+	buf = append(buf, ff_mjpeg_bits_dc_luminance + 1, 16);
+	buf = append(buf, dht_segment_frag, sizeof(dht_segment_frag));
+	buf = append(buf, ff_mjpeg_val_dc, 12);
+	*(buf++) = 0x10;
+	buf = append(buf, ff_mjpeg_bits_ac_luminance + 1, 16);
+	buf = append(buf, ff_mjpeg_val_ac_luminance, 162);
+	*(buf++) = 0x11;
+	buf = append(buf, ff_mjpeg_bits_ac_chrominance + 1, 16);
+	buf = append(buf, ff_mjpeg_val_ac_chrominance, 162);
+	return buf;
+}
+
+static int mjpeg2jpeg_filter(/*AVBitStreamFilterContext *bsfc,
+	AVCodecContext *avctx, const char *args,
+	uint8_t **poutbuf, int *poutbuf_size,
+	const*/ uint8_t *buf, int buf_size/*,
+	int keyframe*/)
+{
+	int input_skip, output_size;
+	//uint8_t *output, *out;
+
+	if (buf_size < 12) {
+		/*av_log(avctx, AV_LOG_ERROR, */fprintf(stderr, "input is truncated\n");
+		return -1; // AVERROR_INVALIDDATA;
+	}
+	if (buf && memcmp("AVI1", buf + 6, 4)) {
+		/*av_log(avctx, AV_LOG_ERROR, */fprintf(stderr, "input is not MJPEG/AVI1\n");
+		return -2; // AVERROR_INVALIDDATA;
+	}
+	input_skip = buf ? (buf[4] << 8) + buf[5] + 4 : 4;
+	if (buf_size < input_skip) {
+		/*av_log(avctx, AV_LOG_ERROR, */fprintf(stderr, "input is truncated\n");
+		return -3; // AVERROR_INVALIDDATA;
+	}
+	output_size = buf_size - input_skip + sizeof(jpeg_header) + dht_segment_size;
+	/*output = out = av_malloc(output_size);
+	if (!output)
+		return AVERROR(ENOMEM);
+	out = append(out, jpeg_header, sizeof(jpeg_header));
+	out = append_dht_segment(out);
+	out = append(out, buf + input_skip, buf_size - input_skip);
+	*poutbuf = output;
+	*poutbuf_size = output_size;
+	return 1;*/
+	if (buf) {
+		memmove(buf + sizeof(jpeg_header) + dht_segment_size, buf + input_skip, buf_size - input_skip);
+		buf = append(buf, jpeg_header, sizeof(jpeg_header));
+		append_dht_segment(buf);
+	}
+	return output_size;
+}
+
+//AVBitStreamFilter ff_mjpeg2jpeg_bsf = {
+//	.name = "mjpeg2jpeg",
+//	.filter = mjpeg2jpeg_filter,
+//};
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
 enum io_method {
@@ -49,16 +230,14 @@ static enum io_method   io = IO_METHOD_MMAP;
 static int              fd = -1;
 static struct buffer   *buffers;
 static unsigned int     n_buffers;
-static int              output;
-static int              force_format;
-static int              fps, fps_cur, fps_avg;
+static int              output, force_format, fps, fps_cur, fps_avg, encode, tst_enc, m2jpeg = 1;
 static struct timespec  start, end;
 static double           fps_total;
 static int              fps_count;
-static int              encode, tst_enc;
 static OMX_COLOR_FORMATTYPE img_fmt = OMX_COLOR_FormatYUV420PackedPlanar;
 static int              img_width = 640, img_height = 480;
 static int              frame_count = 100;
+static struct v4l2_format v4l2_fmt;
 
 void time_diff(struct timespec *start, struct timespec *end, struct timespec *result)
 {
@@ -137,6 +316,8 @@ static OMX_BUFFERHEADERTYPE *read_frame(OMX_BUFFERHEADERTYPE *buf_list)
 		int size = read(fd, out_buf, buffers[0].length);
 		if (-1 == size)
 			SWITCH_ERRNO("read")
+		if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG && m2jpeg)
+			size = mjpeg2jpeg_filter(out_buf, size);
 		process_image(out_buf, size);
 		if (buf_list != NULL)
 			buf_list->nFilledLen = size;
@@ -172,6 +353,9 @@ static OMX_BUFFERHEADERTYPE *read_frame(OMX_BUFFERHEADERTYPE *buf_list)
 				break;
 
 		assert(i < n_buffers);
+
+		if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG && m2jpeg)
+			buf.bytesused = mjpeg2jpeg_filter((void *)buf.m.userptr, buf.bytesused);
 
 		uint bytesused = buf.bytesused;
 
@@ -464,7 +648,6 @@ unsigned int init_device(void)
 	struct v4l2_capability cap;
 	struct v4l2_cropcap cropcap;
 	struct v4l2_crop crop;
-	struct v4l2_format fmt;
 
 	if (-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap)) {
 		if (EINVAL == errno) {
@@ -518,25 +701,26 @@ unsigned int init_device(void)
 		/* Errors ignored. */
 	}
 
-	CLEAR(fmt);
-	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	CLEAR(v4l2_fmt);
+	v4l2_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	if (force_format) {
-		fmt.fmt.pix.width       = 640;
-		fmt.fmt.pix.height      = 480;
-		fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-		fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+		v4l2_fmt.fmt.pix.width       = 640;
+		v4l2_fmt.fmt.pix.height      = 480;
+		v4l2_fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+		v4l2_fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
 
-		if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
+		if (-1 == xioctl(fd, VIDIOC_S_FMT, &v4l2_fmt))
 			errno_exit("VIDIOC_S_FMT");
 
 		/* Note VIDIOC_S_FMT may change width and height. */
 	} else {
 		/* Preserve original settings as set by v4l2-ctl for example */
-		if (-1 == xioctl(fd, VIDIOC_G_FMT, &fmt))
+		if (-1 == xioctl(fd, VIDIOC_G_FMT, &v4l2_fmt))
 			errno_exit("VIDIOC_G_FMT");
 	}
 
-	return fmt.fmt.pix.sizeimage;
+	return v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG && m2jpeg ?
+		mjpeg2jpeg_filter(NULL, v4l2_fmt.fmt.pix.sizeimage) : v4l2_fmt.fmt.pix.sizeimage;
 }
 
 void init_buffers(unsigned int buffer_size, OMX_BUFFERHEADERTYPE *external_buffers)
@@ -610,11 +794,12 @@ static void usage(FILE *fp, int argc, char **argv)
 		 "-i | --img_fmt            Input image format for encoding [%i]\n"
 		 "-x | --img_width          Input image width for encoding [%i]\n"
 		 "-y | --img_height         Input image height for encoding [%i]\n"
+		 "-z | --no_m2jpeg          No MJPEG to JPEG conversion\n"
 		 "",
 		 argv[0], dev_name, frame_count, test_encode_filename, img_fmt, img_width, img_height);
 }
 
-static const char short_options[] = "d:hmruofc:pat:ni:x:y:";
+static const char short_options[] = "d:hmruofc:pat:ni:x:y:z";
 
 static const struct option
 long_options[] = {
@@ -633,6 +818,7 @@ long_options[] = {
 	{ "img_fmt",   required_argument, NULL, 'i' },
 	{ "img_width", required_argument, NULL, 'x' },
 	{ "img_height",required_argument, NULL, 'y' },
+	{ "no_m2jpeg", no_argument,       NULL, 'z' },
 	{ 0, 0, 0, 0 }
 };
 
@@ -732,6 +918,10 @@ int main(int argc, char **argv)
 			img_height = strtol(optarg, NULL, 0);
 			if (errno)
 				errno_exit(optarg);
+			break;
+
+		case 'z':
+			m2jpeg = 0;
 			break;
 
 		default:
