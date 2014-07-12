@@ -126,8 +126,7 @@ const uint8_t ff_mjpeg_val_ac_chrominance[] =
 static const uint8_t jpeg_header[] = {
 	0xff, 0xd8,                     // SOI
 	0xff, 0xe0,                     // APP0
-	0x00, 0x10,                     // APP0 header size (including
-	// this field, but excluding preceding)
+	0x00, 0x10,                     // APP0 header size (including this field, but excluding preceding)
 	0x4a, 0x46, 0x49, 0x46, 0x00,   // ID string 'JFIF\0'
 	0x01, 0x01,                     // version
 	0x00,                           // bits per type
@@ -234,10 +233,10 @@ static int              output, force_format, fps, fps_cur, fps_avg, encode, tst
 static struct timespec  start, end;
 static double           fps_total;
 static int              fps_count;
-static OMX_COLOR_FORMATTYPE img_fmt = OMX_COLOR_FormatYUV420PackedPlanar;
-static int              img_width = 640, img_height = 480;
-static int              frame_count = 100;
-static struct v4l2_format v4l2_fmt;
+static int              frame_count = 1000000;
+//static int              img_width = 640, img_height = 480;
+//static OMX_COLOR_FORMATTYPE  img_fmt = OMX_COLOR_FormatYUV420PackedPlanar;
+static struct v4l2_format    v4l2_fmt;
 
 void time_diff(struct timespec *start, struct timespec *end, struct timespec *result)
 {
@@ -425,7 +424,7 @@ static void mainloop(void)
 		report_fps_avg();
 }
 
-static void stop_capturing(void)
+void stop_capturing(void)
 {
 	enum v4l2_buf_type type;
 
@@ -491,7 +490,7 @@ void start_capturing(void)
 	}
 }
 
-static void uninit_device(int external_buffers)
+void uninit_device(int external_buffers)
 {
 	unsigned int i;
 
@@ -743,7 +742,7 @@ void init_buffers(unsigned int buffer_size, OMX_BUFFERHEADERTYPE *external_buffe
 	}
 }
 
-static void close_device(void)
+void close_device(void)
 {
 	if (-1 == close(fd))
 		errno_exit("close");
@@ -751,7 +750,7 @@ static void close_device(void)
 	fd = -1;
 }
 
-static void open_device(void)
+void open_device(void)
 {
 	struct stat st;
 
@@ -791,12 +790,12 @@ static void usage(FILE *fp, int argc, char **argv)
 		 "-a | --fps_avg            Print average FPS (Frames Per Second)\n"
 		 "-t | --tst_enc filename   Tests encoding to H.264 to filename [%s]\n"
 		 "-n | --encode             Encodes to H.264 to stdout (uses --read or --userp[default] only (no --mmap) and disables --output)\n"
-		 "-i | --img_fmt            Input image format for encoding [%i]\n"
-		 "-x | --img_width          Input image width for encoding [%i]\n"
-		 "-y | --img_height         Input image height for encoding [%i]\n"
+		 //"-i | --img_fmt            Input image format for encoding [%i]\n"
+		 //"-x | --img_width          Input image width for encoding [%i]\n"
+		 //"-y | --img_height         Input image height for encoding [%i]\n"
 		 "-z | --no_m2jpeg          No MJPEG to JPEG conversion\n"
 		 "",
-		 argv[0], dev_name, frame_count, test_encode_filename, img_fmt, img_width, img_height);
+		 argv[0], dev_name, frame_count, test_encode_filename/*, img_fmt, img_width, img_height*/);
 }
 
 static const char short_options[] = "d:hmruofc:pat:ni:x:y:z";
@@ -815,9 +814,9 @@ long_options[] = {
 	{ "fps_avg",   no_argument,       NULL, 'a' },
 	{ "tst_enc",   optional_argument, NULL, 't' },
 	{ "encode",    no_argument,       NULL, 'n' },
-	{ "img_fmt",   required_argument, NULL, 'i' },
-	{ "img_width", required_argument, NULL, 'x' },
-	{ "img_height",required_argument, NULL, 'y' },
+	//{ "img_fmt",   required_argument, NULL, 'i' },
+	//{ "img_width", required_argument, NULL, 'x' },
+	//{ "img_height",required_argument, NULL, 'y' },
 	{ "no_m2jpeg", no_argument,       NULL, 'z' },
 	{ 0, 0, 0, 0 }
 };
@@ -899,26 +898,26 @@ int main(int argc, char **argv)
 			encode++;
 			break;
 
-		case 'i':
-			errno = 0;
-			img_fmt = strtol(optarg, NULL, 0);
-			if (errno)
-				errno_exit(optarg);
-			break;
+		//case 'i':
+		//	errno = 0;
+		//	img_fmt = strtol(optarg, NULL, 0);
+		//	if (errno)
+		//		errno_exit(optarg);
+		//	break;
 
-		case 'x':
-			errno = 0;
-			img_width = strtol(optarg, NULL, 0);
-			if (errno)
-				errno_exit(optarg);
-			break;
+		//case 'x':
+		//	errno = 0;
+		//	img_width = strtol(optarg, NULL, 0);
+		//	if (errno)
+		//		errno_exit(optarg);
+		//	break;
 
-		case 'y':
-			errno = 0;
-			img_height = strtol(optarg, NULL, 0);
-			if (errno)
-				errno_exit(optarg);
-			break;
+		//case 'y':
+		//	errno = 0;
+		//	img_height = strtol(optarg, NULL, 0);
+		//	if (errno)
+		//		errno_exit(optarg);
+		//	break;
 
 		case 'z':
 			m2jpeg = 0;
@@ -943,24 +942,22 @@ int main(int argc, char **argv)
 		return res;
 	}
 
-	open_device();
 	if (encode) {
-		bcm_host_init();
 		capture_encode_jpeg_loop(frame_count/*, img_width, img_height, 14, img_fmt, bufsize*/); // OMX_COLOR_FormatYUV420PackedPlanar); // 10, OMX_COLOR_FormatYUV422PackedPlanar);
-		bcm_host_deinit();
 		if (fps_avg)
 			report_fps_avg();
 	}
 	else {
+		open_device();
 		unsigned int bufsize = init_device();
 		fprintf(stderr, "capture buffer size: %d\n", bufsize);
 		init_buffers(bufsize, NULL);
 		start_capturing();
 		mainloop();
+		stop_capturing();
+		uninit_device(0);
+		close_device();
 	}
-	stop_capturing();
-	uninit_device(encode);
-	close_device();
 	fprintf(stderr, "\n");
 
 	return 0;

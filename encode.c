@@ -35,6 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "interface/vcos/vcos_assert.h"
 
 #include <time.h>
+#include <signal.h>
 
 #include "bcm_host.h"
 #include "ilclient.h"
@@ -538,7 +539,7 @@ disable_port_buffers(COMPONENT_T *comp, OMX_U32 port) {
 
 //#define DEBUG
 
-#define INFO
+//#define INFO
 
 #ifdef DEBUG
 #define DEBUG_PRINT(x) fprintf(stderr, (x));
@@ -605,7 +606,7 @@ video_encode_set_input_image_format(COMPONENT_T *video_encode, OMX_U32 frameWidt
 }
 
 static void 
-video_encode_init(COMPONENT_T *video_encode, OMX_U32 frameWidth, OMX_U32 frameHeight, OMX_COLOR_FORMATTYPE colorFormat) {
+video_encode_init(COMPONENT_T *video_encode) {
 
 	OMX_VIDEO_PARAM_PORTFORMATTYPE format;
 	OMX_ERRORTYPE r;
@@ -617,50 +618,54 @@ video_encode_init(COMPONENT_T *video_encode, OMX_U32 frameWidth, OMX_U32 frameHe
 	//portdef.format.video.xFramerate = frameRate << 16; // 30 << 16;
 	//set_portdef(&portdef, video_encode, 200, 0);
 
-	// set video_encode input image format - port 200
-	video_encode_set_input_image_format(video_encode, frameWidth, frameHeight, colorFormat);
-
 	// set video_encode codec to H.264
 	INIT_OMX_TYPE(format, OMX_VIDEO_PARAM_PORTFORMATTYPE, 201)
 		format.eCompressionFormat = OMX_VIDEO_CodingAVC;
 	r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoPortFormat, &format);
 	vc_assert(r == OMX_ErrorNone);
 
-	// set current bitrate to 1Mbit
 	OMX_VIDEO_PARAM_BITRATETYPE bitrateType;
-	INIT_OMX_TYPE(bitrateType, OMX_VIDEO_PARAM_BITRATETYPE, 201)
-		bitrateType.eControlRate = OMX_Video_ControlRateVariable;
-	bitrateType.nTargetBitrate = 1000000;
-	r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType);
-	vc_assert(r == OMX_ErrorNone);
+	//// set current bitrate to 1Mbit // 0 that means that the output will either use VBR, or no rate control at all
+	//INIT_OMX_TYPE(bitrateType, OMX_VIDEO_PARAM_BITRATETYPE, 201)
+	//	bitrateType.eControlRate = OMX_Video_ControlRateVariable;
+	//bitrateType.nTargetBitrate = 1000000; // 0;
+	//r = OMX_SetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType);
+	//vc_assert(r == OMX_ErrorNone);
 
 	// get current bitrate
 	INIT_OMX_TYPE(bitrateType, OMX_VIDEO_PARAM_BITRATETYPE, 201)
 		OMX_GetParameter(ILC_GET_HANDLE(video_encode), OMX_IndexParamVideoBitrate, &bitrateType);
 	fprintf(stderr, "Current Bitrate=%u\n", bitrateType.nTargetBitrate);
 
+#ifndef TUNNEL
 	// create video_encode input buffers - port 200
 	DEBUG_PRINT("create video_encode input buffers - port 200\n")
 	if ((r_il = ilclient_enable_port_buffers(video_encode, 200, NULL, NULL, NULL)) != 0)
 		ILC_ERR_EXIT("%s:%d: enabling port buffers for 200 failed (%d)!\n")
+#endif /* TUNNEL */
 
 	// create video_encode output buffers - port 201
 	DEBUG_PRINT("create video_encode output buffers - port 201\n")
 	if ((r_il = ilclient_enable_port_buffers(video_encode, 201, NULL, NULL, NULL)) != 0)
 		ILC_ERR_EXIT("%s:%d: enabling port buffers for 201 failed (%d)!\n")
 
+#ifndef TUNNEL
 	// move video_encode to executing
 	fprintf(stderr, "move video_encode to executing\n");
 	ilclient_change_component_state(video_encode, OMX_StateExecuting);
+#endif /* TUNNEL */
 }
 
 static void
 capture_encode_jpeg_error_callback(void *userdata, COMPONENT_T *comp, OMX_U32 error) {
-
+#ifdef INFO
 	TUNNEL_T *tunnel = (TUNNEL_T *)userdata;
-
+#endif /* INFO */
 	INFO_PRINT_2("Error: 0x%X (%s)\n", error, comp == tunnel->source ? "image_decode" : "video_encode");
 }
+
+static void
+release_input_buffers(void);
 
 static void 
 capture_encode_jpeg_port_settings_callback(void *userdata, COMPONENT_T *comp, OMX_U32 port) {
@@ -675,16 +680,24 @@ capture_encode_jpeg_port_settings_callback(void *userdata, COMPONENT_T *comp, OM
 		DEBUG_PRINT("get image_decode output port definition - port 321\n")
 		get_portdef(&portdef, comp, 321, 1);
 
-		video_encode_init(/*video_encode*/tunnel->sink, portdef.format.image.nFrameWidth, portdef.format.image.nFrameHeight, portdef.format.image.eColorFormat);
+		// set video_encode input image format - port 200
+		video_encode_set_input_image_format(/*video_encode*/tunnel->sink, portdef.format.image.nFrameWidth, portdef.format.image.nFrameHeight, portdef.format.image.eColorFormat);
+
+		video_encode_init(/*video_encode*/tunnel->sink);
 
 #ifdef TUNNEL
 		fprintf(stderr, "setup 321 -> 200 tunnel\n");
 		// setup tunnel
 		if ((r_il = ilclient_setup_tunnel(tunnel, 0, 0)) != 0)
 			fprintf(stderr, "Error setting up tunnel: %d\n", r_il);
+
 		// enable ports
 		//if ((r_il = ilclient_enable_tunnel(tunnel)) != 0)
 		//	fprintf(stderr, "Error enabling tunnel: %d\n", r_il);
+
+		// move video_encode to executing
+		fprintf(stderr, "move video_encode to executing\n");
+		ilclient_change_component_state(/*video_encode*/tunnel->sink, OMX_StateExecuting);
 #else
 		// allocate buffers for port 321
 		DEBUG_PRINT("allocate buffers for port 321\n")
@@ -736,6 +749,28 @@ tunnel_buffer(COMPONENT_T *image_decode, COMPONENT_T *video_encode, int *copybuf
 	}
 
 	return out;
+
+#else
+	OMX_ERRORTYPE r;
+	OMX_BUFFERHEADERTYPE *buf;
+	OMX_BUFFERHEADERTYPE *out;
+
+	DEBUG_PRINT("4. get 321 out buffers from image_decode queue\n")
+	while ((out = ilclient_get_output_buffer(image_decode, 321, block)) != NULL) {
+		DEBUG_PRINT("5. send 321 out buffer to image_decode processor\n")
+		if ((r = OMX_FillThisBuffer(ILC_GET_HANDLE(image_decode), out)) != OMX_ErrorNone) {
+			fprintf(stderr, "Error filling 321 out buffer: %x\n", r);
+		}
+	}
+	DEBUG_PRINT("6. get 200 in buffers from video_encode queue\n")
+	while ((buf = ilclient_get_input_buffer(video_encode, 200, block)) != NULL) {
+		DEBUG_PRINT("7. send 200 in buffer to video_encode processor\n")
+		if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(video_encode), buf)) != OMX_ErrorNone) {
+			fprintf(stderr, "Error emptying 200 in buffer: %x!\n", r);
+		}
+	}
+
+	return NULL;
 
 #endif /* TUNNEL */
 }
@@ -798,51 +833,138 @@ get_input_buffers(COMPONENT_T *image_decode, OMX_U32 port, int block, int buffer
 	return cnt;
 }
 
+extern void 
+close_device(void),
+open_device(void), 
+uninit_device(int external_buffers), 
+init_buffers(unsigned int buffer_size, OMX_BUFFERHEADERTYPE *external_buffers),
+stop_capturing(void), 
+start_capturing(void);
+
 extern unsigned int 
 init_device(void);
 
-extern void 
-init_buffers(unsigned int buffer_size, OMX_BUFFERHEADERTYPE *external_buffers);
+static ILCLIENT_T           *_client;
+static COMPONENT_T          *_comp[5];
+static OMX_U32               _port[5][2][3];
+static TUNNEL_T              _tunnel[4];
+static OMX_BUFFERHEADERTYPE *_inputbufferlist;
+static int                   _framenumber, _outframenumber, _copybuffernumber;
+static int                   _torndown;
 
-extern void 
-start_capturing(void);
+static void
+release_input_buffers(void) {
+	OMX_BUFFERHEADERTYPE *buf;
+	OMX_ERRORTYPE r;
+
+	// release empty port 320 input buffers back to image_decode processor
+	DEBUG_PRINT("release empty port 320 input buffers back to image_decode processor\n")
+	while (_inputbufferlist) {
+		/* take a buffer out of inputbufferlist */
+		buf = buffer_list_get_buf_remove(&_inputbufferlist, _inputbufferlist);
+		DEBUG_PRINT_1("buffer 0x%x ", (unsigned int)buf)
+		/* release it */
+		if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(_comp[0]), buf)) != OMX_ErrorNone)
+			fprintf(stderr, "Error emptying buffer: %x\n", r);
+		DEBUG_PRINT("released\n")
+	}
+}
+
+static void
+capture_encode_jpeg_teardown(void) {
+	if (_torndown) {
+		fprintf(stderr, "Torn down.\n");
+		return;
+	}
+
+	stop_capturing();
+	uninit_device(1);
+	close_device();
+
+	fprintf(stderr, "\r          \ninput frames: %d\ncopied frames: %d\noutput frames: %d\n\n", _framenumber, _copybuffernumber, _outframenumber);
+
+	fprintf(stderr, "Teardown.\n");
+
+	// remove callback functions
+	ilclient_set_fill_buffer_done_callback(_client, NULL, NULL);
+	ilclient_set_port_settings_callback(_client, NULL, NULL);
+	ilclient_set_error_callback(_client, NULL, NULL);
+
+	// release empty port 320 input buffers back to image_decode processor
+	release_input_buffers();
+
+	for (int i_comp = 0; i_comp < 5 && _comp[i_comp]; i_comp++)
+		for (int i_port_inout = 0; i_port_inout < 2; i_port_inout++)
+			for (int i_port = 0; i_port < 3 && _port[i_comp][i_port_inout][i_port]; i_port++)
+				disable_port_buffers(_comp[i_comp], _port[i_comp][i_port_inout][i_port]);
+
+#ifdef TUNNEL
+	ilclient_disable_tunnel(_tunnel);
+	ilclient_teardown_tunnels(_tunnel);
+#endif /* TUNNEL */
+
+	ilclient_state_transition(_comp, OMX_StateIdle);
+	ilclient_state_transition(_comp, OMX_StateLoaded);
+
+	ilclient_cleanup_components(_comp);
+
+	OMX_Deinit();
+
+	ilclient_destroy(_client);
+
+	bcm_host_deinit();
+
+	_torndown = 1;
+}
+
+static void 
+intHandler(int dummy) { exit(0); }
 
 int
 capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, uint frameRate, OMX_COLOR_FORMATTYPE colorFormat, uint bufsize*/) {
 	COMPONENT_T *video_encode = NULL, *image_decode = NULL;
-	COMPONENT_T *list[5];
-	TUNNEL_T tunnel[4];
 	OMX_BUFFERHEADERTYPE *buf;
 	OMX_BUFFERHEADERTYPE *out;
 	OMX_ERRORTYPE r;
+	OMX_STATETYPE state;
 	int r_il = 0;
-	ILCLIENT_T *client;
 	int status = 0;
-	int framenumber = 0, outframenumber = 0, copybuffernumber = 0;
 	struct timespec diff;
 
-	memset(list, 0, sizeof(list));
+	memset(_comp, 0, sizeof(_comp));
+	memset(_port, 0, sizeof(_port));
+	_framenumber = _outframenumber = _copybuffernumber = 0;
+	_torndown = 0;
 
-	if ((client = ilclient_init()) == NULL) {
+	bcm_host_init();
+
+	if ((_client = ilclient_init()) == NULL) {
 		fprintf(stderr, "ilclient_init() for video_encode failed!\n");
 		return -3;
 	}
 
 	if ((r = OMX_Init()) != OMX_ErrorNone) {
-		ilclient_destroy(client);
+		ilclient_destroy(_client);
 		fprintf(stderr, "OMX_Init() for video_encode failed with %x!\n", r);
 		return -4;
 	}
 
+	open_device();
+
+	atexit(capture_encode_jpeg_teardown);
+	signal(SIGINT, intHandler);
+
 	// create image_decode
-	if ((r_il = ilclient_create_component(client, &image_decode, "image_decode", ILCLIENT_DISABLE_ALL_PORTS
+	if ((r_il = ilclient_create_component(_client, &image_decode, "image_decode", ILCLIENT_DISABLE_ALL_PORTS
 		| ILCLIENT_ENABLE_INPUT_BUFFERS
 #ifndef TUNNEL
 		| ILCLIENT_ENABLE_OUTPUT_BUFFERS
 #endif /* TUNNEL */
 		)) != 0)
 		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for image_decode failed (%d)!\n")
-	list[0] = image_decode;
+	_comp[0] = image_decode;
+	_port[0][0][0] = 320;
+	_port[0][1][0] = 321;
 
 	// move image_decode to idle
 	ilclient_change_component_state(image_decode, OMX_StateIdle);
@@ -853,14 +975,16 @@ capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	int inputbuffernumber = image_decode_init(image_decode, bufsize);
 
 	// create video_encode
-	if ((r_il = ilclient_create_component(client, &video_encode, "video_encode", ILCLIENT_DISABLE_ALL_PORTS
+	if ((r_il = ilclient_create_component(_client, &video_encode, "video_encode", ILCLIENT_DISABLE_ALL_PORTS
 #ifndef TUNNEL
 		| ILCLIENT_ENABLE_INPUT_BUFFERS
 #endif /* TUNNEL */
 		| ILCLIENT_ENABLE_OUTPUT_BUFFERS
 		)) != 0)
 		ILC_ERR_EXIT("%s:%d: ilclient_create_component() for video_encode failed (%d)!\n")
-	list[1] = video_encode;
+	_comp[1] = video_encode;
+	_port[1][0][0] = 200;
+	_port[1][1][0] = 201;
 
 	// move video_encode to idle
 	ilclient_change_component_state(video_encode, OMX_StateIdle);
@@ -868,21 +992,21 @@ capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, 
 	//video_encode_init(video_encode, frameWidth, frameHeight, colorFormat);
 
 	// create tunnel 321 -> 200
-	set_tunnel(tunnel, image_decode, 321, video_encode, 200);
+	set_tunnel(_tunnel, image_decode, 321, video_encode, 200);
 
 	// set set_port_settings_callback
-	ilclient_set_port_settings_callback(client, capture_encode_jpeg_port_settings_callback, tunnel);
+	ilclient_set_port_settings_callback(_client, capture_encode_jpeg_port_settings_callback, _tunnel);
 
 	// set fill_buffer_done_callback
 	FILL_BUFFER_DONE_DATA filldata;
-	filldata.tunnel = tunnel;
-	filldata.copybuffernumber = &copybuffernumber;
-	ilclient_set_fill_buffer_done_callback(client, capture_encode_jpeg_fill_buffer_done_callback, &filldata);
+	filldata.tunnel = _tunnel;
+	filldata.copybuffernumber = &_copybuffernumber;
+	ilclient_set_fill_buffer_done_callback(_client, capture_encode_jpeg_fill_buffer_done_callback, &filldata);
 
 	// set error_callback
-	ilclient_set_error_callback(client, capture_encode_jpeg_error_callback, tunnel);
+	ilclient_set_error_callback(_client, capture_encode_jpeg_error_callback, _tunnel);
 
-	OMX_BUFFERHEADERTYPE *inputbufferlist = NULL;
+	_inputbufferlist = NULL;
 	int capturing_initialized = 0;
 
 	do {
@@ -895,28 +1019,28 @@ capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, 
 		//if ((buf = ilclient_get_input_buffer(image_decode, 320, 0)) != NULL) {
 		//	vc_assert(buf->nAllocLen >= bufsize);
 		//
-		if (get_input_buffers(image_decode, 320, 0, inputbuffernumber, &inputbufferlist) == inputbuffernumber) {
+		if (get_input_buffers(image_decode, 320, 0, inputbuffernumber, &_inputbufferlist) == inputbuffernumber) {
 
-			if (framenumber < frames) {
+			if (_framenumber < frames) {
 
 				if (!capturing_initialized) {
 					DEBUG_PRINT("initialize buffers and start capturing\n")
-					init_buffers(bufsize, inputbufferlist);
+					init_buffers(bufsize, _inputbufferlist);
 					start_capturing();
-					capturing_initialized++;
+					capturing_initialized = 1;
 				}
 
 				/* fill it */
 				//generate_test_card(buf->pBuffer, &buf->nFilledLen, framenumber++);
-				buf = capture_frame(inputbufferlist);
+				buf = capture_frame(_inputbufferlist);
 
 				/* take a buffer out of inputbufferlist */
-				buffer_list_get_buf_remove(&inputbufferlist, buf);
+				buffer_list_get_buf_remove(&_inputbufferlist, buf);
 
 				buf->nFlags = OMX_BUFFERFLAG_EOS;
-				framenumber++;
+				_framenumber++;
 				clock_gettime(CLOCK_MONOTONIC, &capture_time);
-				INFO_PRINT_2("captured frame %d (%d bytes)\n", framenumber, buf->nFilledLen)
+				INFO_PRINT_2("captured frame %d (%d bytes)\n", _framenumber, buf->nFilledLen)
 
 				DEBUG_PRINT("3. send filled 320 in buffer to image_decode processor\n")
 				if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
@@ -924,19 +1048,20 @@ capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, 
 			}
 		}
 
-		if (framenumber >= frames) {
+		if (_framenumber >= frames) {
 			get_time_diff(&capture_time, &diff);
 			wait_timeout(0, 1000);
 			fprintf(stderr, "\r%.2f ", (1000000000.0 * diff.tv_sec + diff.tv_nsec) / 1000000000.0);
 		}
 
-		OMX_STATETYPE state;
 		// check component is in the right state to accept buffers
 		DEBUG_PRINT("check video_encode component is in the right state to accept buffers\n")
-		if (OMX_GetState(ILC_GET_HANDLE(video_encode), &state) != OMX_ErrorNone || state != OMX_StateExecuting)
+		/*if*/while (OMX_GetState(ILC_GET_HANDLE(video_encode), &state) != OMX_ErrorNone || state != OMX_StateExecuting) {
+			wait_timeout(0, 5);
 			continue;
+		}
 
-		while (tunnel_buffer(image_decode, video_encode, &copybuffernumber, 0) != NULL)
+		while (tunnel_buffer(image_decode, video_encode, &_copybuffernumber, 0) != NULL)
 			wait_timeout(0, 5);
 
 		DEBUG_PRINT("10. get 201 out buffers from video_encode queue\n")
@@ -962,8 +1087,8 @@ capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, 
 				fprintf(stderr, "fwrite: Error writing buffer to stdout: %d!\n", r);
 			}
 			else {
-				outframenumber++;
-				INFO_PRINT_2("output frame %d (%d bytes)\n", outframenumber, out->nFilledLen)
+				_outframenumber++;
+				INFO_PRINT_2("output frame %d (%d bytes)\n", _outframenumber, out->nFilledLen)
 			}
 			fflush(stdout);
 			out->nFilledLen = 0;
@@ -974,43 +1099,10 @@ capture_encode_jpeg_loop(int frames/*, OMX_U32 frameWidth, OMX_U32 frameHeight, 
 			}
 		}
 	}
-	while (framenumber < frames || /*out != NULL ||*/ diff.tv_sec < 1);
+	while (_framenumber < frames || /*out != NULL ||*/ diff.tv_sec < 1);
 
-	fprintf(stderr, "\r          \ninput frames: %d\ncopied frames: %d\noutput frames: %d\n\n", framenumber, copybuffernumber, outframenumber);
+	capture_encode_jpeg_teardown();
 
-	fprintf(stderr, "Teardown.\n");
-
-	// remove callback function
-	ilclient_set_fill_buffer_done_callback(client, NULL, NULL);
-
-	// release empty port 320 input buffers back to image_decode processor
-	DEBUG_PRINT("release empty port 320 input buffers back to image_decode processor\n")
-	while (inputbufferlist) {
-		/* take a buffer out of inputbufferlist */
-		buf = buffer_list_get_buf_remove(&inputbufferlist, inputbufferlist);
-		/* release it */
-		if ((r = OMX_EmptyThisBuffer(ILC_GET_HANDLE(image_decode), buf)) != OMX_ErrorNone)
-			fprintf(stderr, "Error emptying buffer: %x\n", r);
-	}
-
-	disable_port_buffers(image_decode, 320);
-	disable_port_buffers(image_decode, 321);
-	disable_port_buffers(video_encode, 200);
-	disable_port_buffers(video_encode, 201);
-
-#ifdef TUNNEL
-	ilclient_disable_tunnel(tunnel);
-	ilclient_teardown_tunnels(tunnel);
-#endif /* TUNNEL */
-
-	ilclient_state_transition(list, OMX_StateIdle);
-	ilclient_state_transition(list, OMX_StateLoaded);
-
-	ilclient_cleanup_components(list);
-
-	OMX_Deinit();
-
-	ilclient_destroy(client);
 	return status;
 }
 

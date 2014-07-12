@@ -23,7 +23,7 @@ all: capture-encode
 
 encode.o: encode.c
 	@rm -f $@ 
-	$(CC) $(CFLAGS) $(INCLUDES) -g -c $< -o $@ -Wno-deprecated-declarations
+	$(CC) -std=gnu99 $(CFLAGS) $(INCLUDES) -g -c $< -o $@ -Wno-deprecated-declarations
 
 capture-encode.o: capture-encode.c
 	@rm -f $@ 
