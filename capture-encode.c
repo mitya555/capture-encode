@@ -225,11 +225,13 @@ struct buffer {
 
 static char            *dev_name = "/dev/video0", 
                        *test_encode_filename = "test.h264";
+char                   *write_media_file = NULL;
 static enum io_method   io = IO_METHOD_MMAP;
 static int              fd = -1;
 static struct buffer   *buffers;
 static unsigned int     n_buffers;
 static int              output, force_format, fps, fps_cur, fps_avg, encode, tst_enc, m2jpeg = 1;
+int                     psips, bitrate, codec = 5/* H.264/AVC */;
 static struct timespec  start, end;
 static double           fps_total;
 static int              fps_count;
@@ -794,30 +796,51 @@ static void usage(FILE *fp, int argc, char **argv)
 		 //"-x | --img_width          Input image width for encoding [%i]\n"
 		 //"-y | --img_height         Input image height for encoding [%i]\n"
 		 "-z | --no_m2jpeg          No MJPEG to JPEG conversion\n"
+		 "-i | --psips              Enable SPS/PPS insertion in the encoder bitstream. SPS/PPS will be output before each IDR frame or P=intrarefresh frame\n"
+		 "-b | --bitrate            Target bitrate in bits per second (bps) or 0 (no rate control) [%i]\n"
+		 "-e | --codec              Video compression coding (codec) [%i]\n"
+		 "                           0 = OMX_VIDEO_CodingMPEG2,      /**< AKA: H.262 */\n"
+		 "                           1 = OMX_VIDEO_CodingH263,       /**< H.263 */\n"
+		 "                           2 = OMX_VIDEO_CodingMPEG4,      /**< MPEG-4 */\n"
+		 "                           3 = OMX_VIDEO_CodingWMV,        /**< all versions of Windows Media Video */\n"
+		 "                           4 = OMX_VIDEO_CodingRV,         /**< all versions of Real Video */\n"
+		 "                           5 = OMX_VIDEO_CodingAVC,        /**< H.264/AVC */\n"
+		 "                           6 = OMX_VIDEO_CodingMJPEG,      /**< Motion JPEG */\n"
+		 "                           7 = OMX_VIDEO_CodingVP6,        /**< On2 VP6 */\n"
+		 "                           8 = OMX_VIDEO_CodingVP7,        /**< On2 VP7 */\n"
+		 "                           9 = OMX_VIDEO_CodingVP8,        /**< On2 VP8 */\n"
+		 "                          10 = OMX_VIDEO_CodingYUV,        /* raw YUV video */\n"
+		 "                          11 = OMX_VIDEO_CodingSorenson,   /**< Sorenson */\n"
+		 "                          12 = OMX_VIDEO_CodingTheora,     /**< Theora */\n"
+		 "                          13 = OMX_VIDEO_CodingMVC,        /**< H.264/MVC */\n"
 		 "",
-		 argv[0], dev_name, frame_count, test_encode_filename/*, img_fmt, img_width, img_height*/);
+		 argv[0], dev_name, frame_count, test_encode_filename/*, img_fmt, img_width, img_height*/, bitrate, codec);
 }
 
-static const char short_options[] = "d:hmruofc:pat:ni:x:y:z";
+static const char short_options[] = "d:hmruofc:pat:n"/*"i:x:y:"*/"zib:w:e:";
 
 static const struct option
 long_options[] = {
-	{ "device",    required_argument, NULL, 'd' },
-	{ "help",      no_argument,       NULL, 'h' },
-	{ "mmap",      no_argument,       NULL, 'm' },
-	{ "read",      no_argument,       NULL, 'r' },
-	{ "userp",     no_argument,       NULL, 'u' },
-	{ "output",    no_argument,       NULL, 'o' },
-	{ "format",    no_argument,       NULL, 'f' },
-	{ "count",     required_argument, NULL, 'c' },
-	{ "fps_cur",   no_argument,       NULL, 'p' },
-	{ "fps_avg",   no_argument,       NULL, 'a' },
-	{ "tst_enc",   optional_argument, NULL, 't' },
-	{ "encode",    no_argument,       NULL, 'n' },
+	{ "device",      required_argument, NULL, 'd' },
+	{ "help",        no_argument,       NULL, 'h' },
+	{ "mmap",        no_argument,       NULL, 'm' },
+	{ "read",        no_argument,       NULL, 'r' },
+	{ "userp",       no_argument,       NULL, 'u' },
+	{ "output",      no_argument,       NULL, 'o' },
+	{ "format",      no_argument,       NULL, 'f' },
+	{ "count",       required_argument, NULL, 'c' },
+	{ "fps_cur",     no_argument,       NULL, 'p' },
+	{ "fps_avg",     no_argument,       NULL, 'a' },
+	{ "tst_enc",     optional_argument, NULL, 't' },
+	{ "encode",      no_argument,       NULL, 'n' },
 	//{ "img_fmt",   required_argument, NULL, 'i' },
 	//{ "img_width", required_argument, NULL, 'x' },
 	//{ "img_height",required_argument, NULL, 'y' },
-	{ "no_m2jpeg", no_argument,       NULL, 'z' },
+	{ "no_m2jpeg",   no_argument,       NULL, 'z' },
+	{ "psips",       no_argument,       NULL, 'i' },
+	{ "bitrate",     required_argument, NULL, 'b' },
+	{ "write_media", required_argument, NULL, 'w' },
+	{ "codec",       required_argument, NULL, 'e' },
 	{ 0, 0, 0, 0 }
 };
 
@@ -921,6 +944,28 @@ int main(int argc, char **argv)
 
 		case 'z':
 			m2jpeg = 0;
+			break;
+
+		case 'i':
+			psips++;
+			break;
+
+		case 'b':
+			errno = 0;
+			bitrate = strtol(optarg, NULL, 0);
+			if (errno)
+				errno_exit(optarg);
+			break;
+
+		case 'w':
+			write_media_file = optarg;
+			break;
+
+		case 'e':
+			errno = 0;
+			codec = strtol(optarg, NULL, 0);
+			if (errno)
+				errno_exit(optarg);
 			break;
 
 		default:
